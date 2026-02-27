@@ -774,3 +774,54 @@ html {
     font-size: 24px;
   }
 }
+/* ===== Profil: tjänster ===== */
+.profile-services{
+  margin-top: 18px;
+}
+
+.profile-services-title{
+  margin: 0 0 10px;
+  font-size: 16px;
+  letter-spacing: .2px;
+}
+
+.services-grid{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 12px;
+}
+
+.service-item{
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(15,23,42,.02);
+}
+
+.service-ic{
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border: 1px solid var(--border);
+  background: rgba(11,18,32,.06);
+  font-size: 16px;
+  flex: 0 0 auto;
+}
+
+.service-item strong{
+  display:block;
+  margin-bottom: 2px;
+}
+
+/* Mobil */
+@media (max-width: 950px){
+  .services-grid{
+    grid-template-columns: 1fr;
+  }
+}
