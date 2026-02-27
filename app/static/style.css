@@ -1158,3 +1158,19 @@ html {
   border-radius: 12px;
   cursor: pointer;
 }
+.case-illustration{
+  width: 72px;
+  height: 72px;
+  border-radius: 16px;
+  background: #f3f4f6;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.case-img{
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
