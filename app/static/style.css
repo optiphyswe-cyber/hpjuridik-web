@@ -1098,3 +1098,63 @@ html {
     grid-template-columns: 1fr;
   }
 }
+.cookie-banner{
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9999;
+  display: none;
+}
+
+.cookie-banner.is-visible{ display:block; }
+
+.cookie-inner{
+  max-width: 1100px;
+  margin: 0 auto;
+  background: #0b1220;
+  color: #fff;
+  border-radius: 16px;
+  padding: 16px;
+  box-shadow: 0 18px 60px rgba(2,6,23,.35);
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.cookie-text p{
+  margin: 6px 0 0 0;
+}
+
+.cookie-text a{ color: inherit; text-decoration: underline; }
+
+.cookie-actions{
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+/* Mobil */
+@media (max-width: 720px){
+  .cookie-inner{
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .cookie-actions{
+    width: 100%;
+  }
+  .cookie-actions button{
+    width: 100%;
+  }
+}
+
+/* Om du inte redan har btn-secondary */
+.btn-secondary{
+  border: 1px solid rgba(255,255,255,.35);
+  background: transparent;
+  color: #fff;
+  padding: 12px 14px;
+  border-radius: 12px;
+  cursor: pointer;
+}
