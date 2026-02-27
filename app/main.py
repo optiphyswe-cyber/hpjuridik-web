@@ -43,6 +43,7 @@ COMPANY = {
     "orgnr": "559365-2018",
 }
 
+
 def seo(path: str, title: str, description: str):
     return {
         "title": title,
@@ -51,12 +52,14 @@ def seo(path: str, title: str, description: str):
         "robots": "noindex, nofollow" if NOINDEX else "index, follow",
     }
 
+
 def page_ctx(request: Request, path: str, title: str, desc: str):
     return {
         "request": request,
         "seo": seo(path, title, desc),
-        "company": COMPANY,  # om du vill använda i templates senare
+        "company": COMPANY,
     }
+
 
 # -------------------------
 # Email helpers
@@ -98,9 +101,20 @@ def build_email_body(
         f"{COMPANY['orgnr']}\n"
     )
 
-def send_contact_email(namn: str, epost: str, telefon: str, meddelande: str, request: Request) -> None:
+
+def send_contact_email(
+    namn: str,
+    epost: str,
+    telefon: str,
+    meddelande: str,
+    request: Request,
+) -> None:
+    # Kräver Render env vars:
+    # SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, CONTACT_TO
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError("SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render).")
+        raise RuntimeError(
+            "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render)."
+        )
 
     subject = f"HP Juridik | Ny kontaktförfrågan från {namn}"
     body = build_email_body(namn, epost, telefon, meddelande, request)
@@ -112,13 +126,14 @@ def send_contact_email(namn: str, epost: str, telefon: str, meddelande: str, req
     msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
     msg["To"] = CONTACT_TO
 
-    # Reply-To så du kan svara direkt på klienten
+    # Reply-To så du kan svara direkt till klienten
     msg["Reply-To"] = epost
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
         server.starttls()
         server.login(SMTP_USER, SMTP_PASS)
         server.sendmail(SMTP_USER, [CONTACT_TO], msg.as_string())
+
 
 # -------------------------
 # Routes
@@ -133,53 +148,6 @@ def home(request: Request):
     )
     return templates.TemplateResponse("pages/home.html", ctx)
 
-@app.get("/tjanster", response_class=HTMLResponse)
-def services(request: Request):
-    ctx = page_ctx(
-        request,
-        "/tjanster",
-        "Tjänster – HP Juridik",
-        "Juridisk rådgivning för privatpersoner och företag.",
-    )
-    return templates.TemplateResponse("pages/services.html", ctx)
-
-@app.get("/om-oss", response_class=HTMLResponse)
-def about(request: Request):
-    ctx = page_ctx(
-        request,
-        "/om-oss",
-        "Om oss – HP Juridik",
-        "Lär känna HP Juridik och hur vi arbetar.",
-    )
-    # Använder pages/page.html som generell sida
-    ctx.update(
-        {
-            "heading": "Om oss",
-            "lead": "Personlig, trygg och värdeskapande juridik.",
-            "body": (
-                "<p>Fyll på med din presentation här. "
-                "Vi kan bygga denna sida mer premium med bild, meriter och tydliga rättsområden.</p>"
-            ),
-        }
-    )
-    return templates.TemplateResponse("pages/page.html", ctx)
-
-@app.get("/cases", response_class=HTMLResponse)
-def cases(request: Request):
-    ctx = page_ctx(
-        request,
-        "/cases",
-        "Cases – HP Juridik",
-        "Exempel på uppdrag och resultat.",
-    )
-    ctx.update(
-        {
-            "heading": "Cases",
-            "lead": "Exempel på uppdrag (kan anonymiseras).",
-            "body": "<p>Kommer snart.</p>",
-        }
-    )
-    return templates.TemplateResponse("pages/page.html", ctx)
 
 @app.get("/gdpr", response_class=HTMLResponse)
 def gdpr(request: Request):
@@ -189,17 +157,8 @@ def gdpr(request: Request):
         "GDPR – HP Juridik",
         "Information om personuppgifter och integritet.",
     )
-    ctx.update(
-        {
-            "heading": "GDPR",
-            "lead": "Information om hur personuppgifter hanteras.",
-            "body": (
-                "<p>Kommer snart. Här lägger vi en tydlig policy med kontaktuppgifter, "
-                "laglig grund, lagringstid och rättigheter.</p>"
-            ),
-        }
-    )
-    return templates.TemplateResponse("pages/page.html", ctx)
+    return templates.TemplateResponse("pages/gdpr.html", ctx)
+
 
 @app.get("/allmanna-villkor", response_class=HTMLResponse)
 def terms(request: Request):
@@ -209,25 +168,8 @@ def terms(request: Request):
         "Allmänna villkor – HP Juridik",
         "Villkor för tjänster och rådgivning.",
     )
-    ctx.update(
-        {
-            "heading": "Allmänna villkor",
-            "lead": "Villkor för tjänster och rådgivning.",
-            "body": "<p>Kommer snart. Vi kan skriva en enkel struktur med ansvar, betalning, avbokning och tvistlösning.</p>",
-        }
-    )
-    return templates.TemplateResponse("pages/page.html", ctx)
+    return templates.TemplateResponse("pages/terms.html", ctx)
 
-@app.get("/kontakta-oss", response_class=HTMLResponse)
-def contact(request: Request):
-    ctx = page_ctx(
-        request,
-        "/kontakta-oss",
-        "Kontakta oss – HP Juridik",
-        "Kontakta oss för rådgivning.",
-    )
-    ctx.update({"sent": False, "error": None, "company": COMPANY})
-    return templates.TemplateResponse("pages/contact.html", ctx)
 
 @app.post("/kontakta-oss", response_class=HTMLResponse)
 def contact_submit(
@@ -240,9 +182,14 @@ def contact_submit(
 ):
     # Spam -> låtsas OK utan att skicka
     if website:
-        ctx = page_ctx(request, "/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning.")
-        ctx.update({"sent": True, "error": None, "company": COMPANY})
-        return templates.TemplateResponse("pages/contact.html", ctx)
+        ctx = page_ctx(
+            request,
+            "/",
+            "HP Juridik – 20 min gratis rådgivning",
+            "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
+        )
+        ctx.update({"sent": True, "error": None})
+        return templates.TemplateResponse("pages/home.html", ctx)
 
     error = None
     try:
@@ -250,9 +197,16 @@ def contact_submit(
     except Exception as e:
         error = str(e)
 
-    ctx = page_ctx(request, "/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning.")
-    ctx.update({"sent": error is None, "error": error, "company": COMPANY})
-    return templates.TemplateResponse("pages/contact.html", ctx)
+    # Returnera startsidan (one-page) med status-rutor i kontaktsektionen
+    ctx = page_ctx(
+        request,
+        "/",
+        "HP Juridik – 20 min gratis rådgivning",
+        "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
+    )
+    ctx.update({"sent": error is None, "error": error})
+    return templates.TemplateResponse("pages/home.html", ctx)
+
 
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
