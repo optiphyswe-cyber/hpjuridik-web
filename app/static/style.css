@@ -887,3 +887,102 @@ html {
     grid-template-columns:1fr;
   }
 }
+/* ===========================
+   CASES – premiumkort
+   =========================== */
+
+.cases-head{
+  display:flex;
+  align-items:flex-end;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.cases-grid{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.case-card{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: 0 8px 30px rgba(2,6,23,.06);
+  transition: transform .25s ease, box-shadow .25s ease, border-color .25s ease;
+}
+
+.case-card:hover{
+  transform: translateY(-4px);
+  box-shadow: 0 18px 45px rgba(2,6,23,.12);
+  border-color: rgba(200,161,90,.35);
+}
+
+.case-media{
+  border-bottom: 1px solid var(--border);
+  background: rgba(15,23,42,.02);
+}
+
+.case-media img{
+  width: 100%;
+  display:block;
+  object-fit: cover;
+  aspect-ratio: 16 / 10;
+}
+
+.case-body{
+  padding: 16px 16px 18px;
+}
+
+.case-meta{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.case-tag{
+  font-size: 12.5px;
+  border: 1px solid rgba(200,161,90,.35);
+  background: rgba(200,161,90,.10);
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.case-year{
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.case-title{
+  margin: 0 0 8px;
+  font-size: 16px;
+  line-height: 1.35;
+}
+
+.case-lead{
+  margin: 0 0 12px;
+  color: var(--muted);
+  line-height: 1.7;
+  font-size: 14.5px;
+}
+
+.case-bullets{
+  margin: 0;
+  padding-left: 16px;
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+@media (max-width: 980px){
+  .cases-grid{
+    grid-template-columns: 1fr;
+  }
+  .case-media img{
+    aspect-ratio: 16 / 9;
+  }
+}
