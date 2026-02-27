@@ -86,39 +86,17 @@ def send_contact_email(namn: str, epost: str, telefon: str, arende: str, meddela
 # -------------------------
 # Routes
 # -------------------------
-@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse(
-        "pages/home.html",
-        {
-            "request": request,
-            "seo": seo("/", "HP Juridik – 20 min gratis rådgivning",
-                       "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.")
-        }
-    )
-
-@app.get("/tjanster", response_class=HTMLResponse)
-def services(request: Request):
-    return templates.TemplateResponse(
-        "pages/services.html",
-        {
-            "request": request,
-            "seo": seo("/tjanster", "Tjänster – HP Juridik",
-                       "Juridisk rådgivning för privatpersoner och företag.")
-        }
-    )
+from fastapi import HTTPException  # lägg i imports om du inte har
 
 @app.get("/kontakta-oss", response_class=HTMLResponse)
 def contact(request: Request):
-    return templates.TemplateResponse(
-        "pages/contact.html",
-        {
-            "request": request,
-            "seo": seo("/kontakta-oss", "Kontakta oss – HP Juridik",
-                       "Kontakta oss för rådgivning."),
-            "sent": False
-        }
-    )
+    # Rendera sidan även om seo inte finns eller env saknas
+    ctx = {"request": request, "sent": False}
+    try:
+        ctx["seo"] = seo("/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning.")
+    except Exception:
+        pass
+    return templates.TemplateResponse("pages/contact.html", ctx)
 
 @app.post("/kontakta-oss", response_class=HTMLResponse)
 def contact_submit(
@@ -126,28 +104,24 @@ def contact_submit(
     namn: str = Form(...),
     epost: str = Form(...),
     telefon: str = Form(""),
-    arende: str = Form(""),
     meddelande: str = Form(...),
-    website: str = Form("", required=False),  # honeypot
+    website: str = Form("", required=False),
 ):
-    # Spam: honeypot ifylld -> låtsas OK (skicka inget)
+    # spam -> låtsas OK
     if website:
-        return templates.TemplateResponse(
-            "pages/contact.html",
-            {"request": request, "seo": seo("/kontakta-oss", "Kontakta oss – HP Juridik", ""), "sent": True}
-        )
+        return templates.TemplateResponse("pages/contact.html", {"request": request, "sent": True})
 
-    send_contact_email(namn, epost, telefon, arende, meddelande, request)
+    # Försök skicka mail, men om det failar: visa snyggt fel istället för 500
+    error = None
+    try:
+        send_contact_email(namn, epost, telefon, "", meddelande, request)  # om din funktion har arende-parameter: sätt "" här
+    except Exception as e:
+        error = str(e)
 
-    return templates.TemplateResponse(
-        "pages/contact.html",
-        {
-            "request": request,
-            "seo": seo("/kontakta-oss", "Tack – HP Juridik", "Tack för ditt meddelande."),
-            "sent": True
-        }
-    )
+    ctx = {"request": request, "sent": error is None, "error": error}
+    try:
+        ctx["seo"] = seo("/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning.")
+    except Exception:
+        pass
 
-@app.get("/healthz", response_class=PlainTextResponse)
-def healthz():
-    return "ok"
+    return templates.TemplateResponse("pages/contact.html", ctx)
