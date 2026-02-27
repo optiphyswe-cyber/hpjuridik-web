@@ -1,30 +1,31 @@
-<!DOCTYPE html>
-<html lang="sv">
-<head>
-    <meta charset="UTF-8">
-    <title>{{ seo.title if seo else "HP Juridik" }}</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="{{ seo.description if seo else '' }}">
-    <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
 
-{% include "partials/header.html" %}
+    <!DOCTYPE html>
+    <html lang="sv">
+    <head>
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-<main class="container">
-    {% block content %}{% endblock %}
-</main>
+      <title>{{ seo.title if seo else "HP Juridik" }}</title>
+      {% if seo and seo.description %}
+        <meta name="description" content="{{ seo.description }}" />
+      {% endif %}
+      {% if seo and seo.canonical %}
+        <link rel="canonical" href="{{ seo.canonical }}" />
+      {% endif %}
+      {% if seo and seo.robots %}
+        <meta name="robots" content="{{ seo.robots }}" />
+      {% endif %}
 
-{% include "partials/footer.html" %}
+      <link rel="stylesheet" href="/static/style.css" />
+    </head>
 
-</body>
     <body>
+      {% include "partials/header.html" %}
 
-    {% include "partials/header.html" %}
+      <main>
+        {% block content %}{% endblock %}
+      </main>
 
-    {% block content %}{% endblock %}
-
-    {% include "partials/footer.html" %}
-
-</body>
-</html>
+      {% include "partials/footer.html" %}
+    </body>
+    </html>
