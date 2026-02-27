@@ -1,142 +1,28 @@
  {% extends "base.html" %}
     {% block content %}
+    <section class="page">
+      <div class="container narrow">
+        <h1>GDPR</h1>
+        <p class="muted">Information om hur vi hanterar personuppgifter.</p>
 
-    <section id="hem" class="section hero">
-      <div class="container">
-        <div class="card hero-card">
-          <div class="hero-text">
-            <h1>20 min gratis rådgivning</h1>
-            <p class="lead">Personlig, trygg och värdeskapande juridik för privatpersoner och företag.</p>
-
-            <ul class="bullets">
-              <li>Ansvarsförsäkring via Folksam sedan 2020</li>
-              <li>Rättsskydds- och rättshjälpsärenden</li>
-              <li>Avtalsrätt, familjerätt, arbetsrätt, fordringsrätt</li>
-              <li>Boutredningar & bodelningar</li>
-              <li>Inga krav på vidare köp</li>
-            </ul>
-
-            <div class="cta-row">
-              <a class="btn-primary" href="/#kontakta-oss">Boka rådgivning</a>
-              <a class="btn-secondary" href="/#tjanster">Se tjänster</a>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="om-oss" class="section">
-      <div class="container">
-        <h2>Om oss</h2>
-        <p class="muted">
-          Här lägger du din presentation. Vi kan lägga in din bild, meriter och tydlig specialisering.
+        <h2>Personuppgiftsansvarig</h2>
+        <p>
+          HP Juridik (Subsidiaritet i Lund AB), Org.nr 559365-2018<br>
+          Karl XI gata 21, 222 20 Lund<br>
+          E-post: hp@hpjuridik.se
         </p>
+
+        <h2>Vilka uppgifter vi samlar in</h2>
+        <p>Uppgifter du lämnar via kontaktformuläret: namn, e-post, telefon (om angivet) och meddelande.</p>
+
+        <h2>Syfte och laglig grund</h2>
+        <p>Vi behandlar uppgifter för att kunna återkoppla på din förfrågan. Laglig grund: berättigat intresse eller avtal.</p>
+
+        <h2>Lagringstid</h2>
+        <p>Uppgifter sparas så länge det krävs för att hantera ärendet och enligt tillämpliga regler.</p>
+
+        <h2>Dina rättigheter</h2>
+        <p>Du kan begära tillgång, rättelse eller radering. Kontakta oss på hp@hpjuridik.se.</p>
       </div>
     </section>
-
-    <section id="tjanster" class="section">
-      <div class="container">
-        <h2>Tjänster</h2>
-        <div class="grid">
-          <div class="feature">
-            <h3>Avtalsrätt</h3>
-            <p>Upprättande och granskning av avtal för privatpersoner och företag.</p>
-          </div>
-          <div class="feature">
-            <h3>Familjerätt</h3>
-            <p>Vårdnad, boende, umgänge, bodelning och boutredning.</p>
-          </div>
-          <div class="feature">
-            <h3>Arbetsrätt</h3>
-            <p>Rådgivning för arbetsgivare och arbetstagare.</p>
-          </div>
-          <div class="feature">
-            <h3>Fordringsrätt</h3>
-            <p>Tvister om betalning, krav, förlikning och process.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="cases" class="section">
-      <div class="container">
-        <h2>Cases</h2>
-        <p class="muted">Exempel på uppdrag (anonymiserade). Kommer snart.</p>
-      </div>
-    </section>
-
-    <section id="kontakta-oss" class="section">
-      <div class="container">
-        <div class="contact-header">
-          <h2>Kontakta oss</h2>
-          <p class="lead">Skicka ett meddelande så återkommer vi normalt inom 24 timmar.</p>
-        </div>
-
-        {% if sent %}
-          <div class="success-box">
-            <h3>Tack för ditt meddelande.</h3>
-            <p>Vi återkommer så snart som möjligt.</p>
-          </div>
-        {% endif %}
-
-        {% if error %}
-          <div class="error-box">
-            <strong>Det gick inte att skicka just nu.</strong><br>
-            Mejla oss direkt på <strong>hp@hpjuridik.se</strong>.
-            <div class="error-detail">{{ error }}</div>
-          </div>
-        {% endif %}
-
-        <div class="contact-grid">
-          <form method="post" action="/kontakta-oss" class="contact-form">
-            <input type="text" name="website" style="display:none" />
-
-            <div class="form-group">
-              <label for="namn">Namn</label>
-              <input type="text" id="namn" name="namn" required />
-            </div>
-
-            <div class="form-group">
-              <label for="epost">E-post</label>
-              <input type="email" id="epost" name="epost" required />
-            </div>
-
-            <div class="form-group">
-              <label for="telefon">Telefon (valfritt)</label>
-              <input type="text" id="telefon" name="telefon" />
-            </div>
-
-            <div class="form-group">
-              <label for="meddelande">Meddelande</label>
-              <textarea id="meddelande" name="meddelande" rows="6" required></textarea>
-            </div>
-
-            <button type="submit" class="btn-primary">Skicka meddelande</button>
-          </form>
-
-          <div class="contact-info">
-            <h3>Kontaktuppgifter</h3>
-            <p><strong>HP Juridik</strong></p>
-            <p>
-              📞 076-317 12 84<br />
-              ✉ hp@hpjuridik.se<br />
-              🌐 <a href="https://hpjuridik.se" target="_blank" rel="noopener">hpjuridik.se</a><br />
-              📍 Karl XI gata 21, 222 20 Lund<br />
-              🏢 Subsidiaritet i Lund AB<br />
-              Org.nr: 559365-2018
-            </p>
-
-            <div class="trust-box">
-              <h4>Varför kontakta oss?</h4>
-              <ul>
-                <li>✔ Personlig rådgivning</li>
-                <li>✔ Tydlig och trygg kommunikation</li>
-                <li>✔ 20 min gratis första bedömning</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
-    </section>
-
     {% endblock %}
