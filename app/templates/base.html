@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="sv">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <title>{{ seo.title if seo and seo.title else "HP Juridik" }}</title>
+  <meta name="description" content="{{ seo.description if seo and seo.description else '' }}" />
+  {% if seo and seo.canonical %}<link rel="canonical" href="{{ seo.canonical }}" />{% endif %}
+  {% if seo and seo.robots %}<meta name="robots" content="{{ seo.robots }}" />{% endif %}
+
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  {% include "partials/header.html" %}
+
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  {% include "partials/footer.html" %}
+</body>
+</html>
