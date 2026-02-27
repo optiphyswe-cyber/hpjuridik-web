@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page">
+  <h1>Kontakta oss</h1>
+  <p class="muted">Skicka ett meddelande så återkommer vi normalt inom 24 timmar.</p>
+
+  {% if sent %}
+    <div class="alert success">
+      Tack! Ditt meddelande är skickat.
+    </div>
+  {% endif %}
+
+  <form class="form" method="post" action="/kontakta-oss">
+    <!-- Honeypot (spam-skydd): ska vara tom -->
+    <input class="hp" type="text" name="website" tabindex="-1" autocomplete="off" />
+
+    <label>
+      Namn
+      <input name="namn" required />
+    </label>
+
+    <label>
+      E-post
+      <input name="epost" type="email" required />
+    </label>
+
+    <label>
+      Meddelande
+      <textarea name="meddelande" rows="6" required></textarea>
+    </label>
+
+    <button class="btn" type="submit">Skicka</button>
+  </form>
+</section>
+{% endblock %}
