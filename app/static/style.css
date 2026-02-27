@@ -478,3 +478,195 @@ html {
     text-align: center;
   }
 }
+/* ===========================
+   Premium hero + kontaktform
+   =========================== */
+
+.hero {
+  padding: 70px 0;
+}
+
+.hero-wrap{
+  display:grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 32px;
+  align-items: start;
+}
+
+/* Vänstersidan */
+.hero-copy{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 4px);
+  box-shadow: var(--shadow);
+  padding: 34px;
+  position: relative;
+  overflow: hidden;
+}
+
+/* subtil “accent glow” */
+.hero-copy::before{
+  content:"";
+  position:absolute;
+  inset: -120px -120px auto auto;
+  width: 240px;
+  height: 240px;
+  background: radial-gradient(circle, rgba(200,161,90,.22), rgba(200,161,90,0) 60%);
+  pointer-events:none;
+}
+
+.pill-row{
+  display:flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.pill{
+  display:inline-flex;
+  align-items:center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(15,23,42,.02);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.pill-accent{
+  border-color: rgba(200,161,90,.35);
+  background: rgba(200,161,90,.10);
+  color: var(--text);
+}
+
+.hero-copy h1{
+  font-size: 44px;
+  line-height: 1.08;
+  margin: 0 0 12px;
+  letter-spacing: -0.4px;
+}
+
+.hero-lead{
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.75;
+}
+
+.hero-points{
+  display:grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.point{
+  display:flex;
+  gap: 12px;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.75);
+}
+
+.point-ic{
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background: rgba(11,18,32,.06);
+  border: 1px solid var(--border);
+  font-weight: 800;
+}
+
+.hero-mini{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+
+.mini-card{
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(15,23,42,.02);
+}
+
+.mini-top{
+  font-weight: 700;
+  font-size: 13.5px;
+  margin-bottom: 4px;
+}
+
+/* Högersidan (formulär) */
+.hero-form .form-card{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 6px);
+  box-shadow: var(--shadow);
+  padding: 22px;
+}
+
+.form-head h2{
+  font-size: 22px;
+  margin: 0 0 6px;
+}
+
+.nice-form{
+  margin-top: 14px;
+}
+
+.two-col{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.form-hint{
+  font-size: 12.5px;
+  margin-top: 8px;
+  line-height: 1.5;
+}
+
+.btn-wide{
+  width: 100%;
+  text-align: center;
+  border-radius: 14px;
+  padding: 14px 18px;
+}
+
+.form-foot{
+  margin-top: 12px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.form-foot a{
+  text-decoration: underline;
+}
+
+/* Valfritt: sticky formulär på desktop */
+@media (min-width: 1000px){
+  .hero-form{
+    position: sticky;
+    top: 96px;
+  }
+}
+
+/* Responsive */
+@media (max-width: 980px){
+  .hero-wrap{
+    grid-template-columns: 1fr;
+  }
+  .hero-copy h1{
+    font-size: 36px;
+  }
+  .hero-mini{
+    grid-template-columns: 1fr;
+  }
+  .two-col{
+    grid-template-columns: 1fr;
+  }
+}
