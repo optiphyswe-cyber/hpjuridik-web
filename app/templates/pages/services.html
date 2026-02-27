@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="page">
+  <h1>Tjänster</h1>
+  <p class="muted">Välj område eller kontakta oss så guidar vi dig rätt.</p>
+
+  <div class="cards">
+    <a class="card" href="/tjanster/avtalsratt">
+      <div class="icon">📄</div>
+      <div>
+        <div class="card-title">Avtalsrätt</div>
+        <div class="muted">Granskning, upprättande, förhandling.</div>
+      </div>
+    </a>
+
+    <a class="card" href="/tjanster/familjeratt">
+      <div class="icon">👪</div>
+      <div>
+        <div class="card-title">Familjerätt</div>
+        <div class="muted">Bodelning, samboavtal, vårdnad.</div>
+      </div>
+    </a>
+
+    <a class="card" href="/tjanster/arbetsratt">
+      <div class="icon">🧾</div>
+      <div>
+        <div class="card-title">Arbetsrätt</div>
+        <div class="muted">Rådgivning, tvist, uppsägning.</div>
+      </div>
+    </a>
+
+    <a class="card" href="/tjanster/fordringar">
+      <div class="icon">⚖️</div>
+      <div>
+        <div class="card-title">Fordringar</div>
+        <div class="muted">Kravbrev, indrivning, process.</div>
+      </div>
+    </a>
+  </div>
+</section>
+{% endblock %}
