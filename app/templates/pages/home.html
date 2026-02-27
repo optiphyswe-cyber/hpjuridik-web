@@ -1,22 +1,45 @@
 {% extends "base.html" %}
+
 {% block content %}
-<section class="hero">
-  <div class="hero-card">
-    <h1>20 min gratis rådgivning</h1>
-    <p>Personlig, trygg och värdeskapande juridik för privatpersoner och företag.</p>
 
-    <ul class="bullets">
-      <li>Ansvarsförsäkring via Folksam sedan 2020</li>
-      <li>Rättsskydds- och rättshjälpsärenden</li>
-      <li>Avtalsrätt, familjerätt, arbetsrätt, fordringsrätt</li>
-      <li>Boutredningar & bodelningar</li>
-      <li>Inga krav på vidare köp</li>
-    </ul>
-
-    <div class="cta">
-      <a class="btn" href="/kontakta-oss">Boka rådgivning</a>
-      <a class="btn ghost" href="/tjanster">Se tjänster</a>
+<!-- HERO / HEM -->
+<section id="hem" class="section hero">
+    <div class="container">
+        <h1>20 min gratis rådgivning</h1>
+        <p>Personlig, trygg och värdeskapande juridik.</p>
     </div>
-  </div>
 </section>
+
+<!-- OM OSS -->
+<section id="om-oss" class="section">
+    <div class="container">
+        <h2>Om oss</h2>
+        <p>Presentation av dig som jurist här.</p>
+    </div>
+</section>
+
+<!-- TJÄNSTER -->
+<section id="tjanster" class="section">
+    <div class="container">
+        <h2>Tjänster</h2>
+        <p>Familjerätt, avtalsrätt, arbetsrätt m.m.</p>
+    </div>
+</section>
+
+<!-- CASES -->
+<section id="cases" class="section">
+    <div class="container">
+        <h2>Cases</h2>
+        <p>Exempel på uppdrag.</p>
+    </div>
+</section>
+
+<!-- KONTAKT -->
+<section id="kontakta-oss" class="section">
+    <div class="container">
+        <h2>Kontakta oss</h2>
+        {% include "pages/contact.html" %}
+    </div>
+</section>
+
 {% endblock %}
