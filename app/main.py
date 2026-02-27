@@ -29,6 +29,20 @@ SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 CONTACT_TO = os.getenv("CONTACT_TO", "hp@hpjuridik.se")
 
+# -------------------------
+# Company info (single source of truth)
+# -------------------------
+COMPANY = {
+    "brand": "HP Juridik",
+    "signature_name": "HP",
+    "phone": "0763171284",
+    "email": "hp@hpjuridik.se",
+    "website": "hpjuridik.se",
+    "address": "Karl XI gata 21, 222 20 Lund",
+    "company": "Subsidiaritet i Lund AB",
+    "orgnr": "559365-2018",
+}
+
 def seo(path: str, title: str, description: str):
     return {
         "title": title,
@@ -37,43 +51,69 @@ def seo(path: str, title: str, description: str):
         "robots": "noindex, nofollow" if NOINDEX else "index, follow",
     }
 
+def page_ctx(request: Request, path: str, title: str, desc: str):
+    return {
+        "request": request,
+        "seo": seo(path, title, desc),
+        "company": COMPANY,  # om du vill använda i templates senare
+    }
+
 # -------------------------
 # Email helpers
 # -------------------------
-def build_email_body(namn: str, epost: str, telefon: str, meddelande: str, request: Request) -> str:
+def build_email_body(
+    namn: str,
+    epost: str,
+    telefon: str,
+    meddelande: str,
+    request: Request,
+) -> str:
     ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
     ip = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "unknown")
 
-    telefon_txt = telefon if telefon else "Ej angivet"
+    telefon_txt = telefon.strip() if telefon and telefon.strip() else "Ej angivet"
 
     return (
-        "Ny kontaktförfrågan via HP Juridik\n"
-        "---------------------------------\n\n"
+        "NY KONTAKTFÖRFRÅGAN (HPJURIDIK.SE)\n"
+        "====================================\n\n"
         f"Namn: {namn}\n"
         f"E-post: {epost}\n"
         f"Telefon: {telefon_txt}\n\n"
-        "Meddelande:\n"
+        "MEDDELANDE\n"
+        "------------------------------------\n"
         f"{meddelande}\n\n"
-        "---------------------------------\n"
+        "TEKNISK INFO\n"
+        "------------------------------------\n"
         f"Tid: {ts}\n"
         f"IP: {ip}\n"
-        f"User-Agent: {ua}\n"
+        f"User-Agent: {ua}\n\n"
+        "SIGNATUR\n"
+        "------------------------------------\n"
+        "Mvh // HP\n"
+        f"{COMPANY['phone']}\n"
+        f"{COMPANY['website']}\n"
+        f"{COMPANY['address']}\n"
+        f"{COMPANY['company']}\n"
+        f"{COMPANY['orgnr']}\n"
     )
 
 def send_contact_email(namn: str, epost: str, telefon: str, meddelande: str, request: Request) -> None:
-    # Kräver att du satt SMTP_* i Render Environment
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
         raise RuntimeError("SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render).")
 
-    subject = f"Kontaktförfrågan: {namn}"
+    subject = f"HP Juridik | Ny kontaktförfrågan från {namn}"
     body = build_email_body(namn, epost, telefon, meddelande, request)
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
-    msg["From"] = formataddr(("HP Juridik", SMTP_USER))
+
+    # From måste ofta matcha SMTP_USER för att levereras bra
+    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
     msg["To"] = CONTACT_TO
-    msg["Reply-To"] = epost  # så du kan svara direkt till kunden
+
+    # Reply-To så du kan svara direkt på klienten
+    msg["Reply-To"] = epost
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
         server.starttls()
@@ -85,95 +125,109 @@ def send_contact_email(namn: str, epost: str, telefon: str, meddelande: str, req
 # -------------------------
 @app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse(
-        "pages/home.html",
-        {
-            "request": request,
-            "seo": seo(
-                "/",
-                "HP Juridik – 20 min gratis rådgivning",
-                "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
-            ),
-        },
+    ctx = page_ctx(
+        request,
+        "/",
+        "HP Juridik – 20 min gratis rådgivning",
+        "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
     )
+    return templates.TemplateResponse("pages/home.html", ctx)
 
 @app.get("/tjanster", response_class=HTMLResponse)
 def services(request: Request):
-    return templates.TemplateResponse(
-        "pages/services.html",
-        {
-            "request": request,
-            "seo": seo(
-                "/tjanster",
-                "Tjänster – HP Juridik",
-                "Juridisk rådgivning för privatpersoner och företag.",
-            ),
-        },
+    ctx = page_ctx(
+        request,
+        "/tjanster",
+        "Tjänster – HP Juridik",
+        "Juridisk rådgivning för privatpersoner och företag.",
     )
+    return templates.TemplateResponse("pages/services.html", ctx)
 
 @app.get("/om-oss", response_class=HTMLResponse)
 def about(request: Request):
-    return templates.TemplateResponse(
-        "pages/page.html",
+    ctx = page_ctx(
+        request,
+        "/om-oss",
+        "Om oss – HP Juridik",
+        "Lär känna HP Juridik och hur vi arbetar.",
+    )
+    # Använder pages/page.html som generell sida
+    ctx.update(
         {
-            "request": request,
-            "seo": seo("/om-oss", "Om oss – HP Juridik", "Lär känna HP Juridik och hur vi arbetar."),
             "heading": "Om oss",
             "lead": "Personlig, trygg och värdeskapande juridik.",
-            "body": "<p>Fyll på med din presentation här.</p>",
-        },
+            "body": (
+                "<p>Fyll på med din presentation här. "
+                "Vi kan bygga denna sida mer premium med bild, meriter och tydliga rättsområden.</p>"
+            ),
+        }
     )
+    return templates.TemplateResponse("pages/page.html", ctx)
 
 @app.get("/cases", response_class=HTMLResponse)
 def cases(request: Request):
-    return templates.TemplateResponse(
-        "pages/page.html",
+    ctx = page_ctx(
+        request,
+        "/cases",
+        "Cases – HP Juridik",
+        "Exempel på uppdrag och resultat.",
+    )
+    ctx.update(
         {
-            "request": request,
-            "seo": seo("/cases", "Cases – HP Juridik", "Exempel på uppdrag och resultat."),
             "heading": "Cases",
             "lead": "Exempel på uppdrag (kan anonymiseras).",
             "body": "<p>Kommer snart.</p>",
-        },
+        }
     )
+    return templates.TemplateResponse("pages/page.html", ctx)
 
 @app.get("/gdpr", response_class=HTMLResponse)
 def gdpr(request: Request):
-    return templates.TemplateResponse(
-        "pages/page.html",
+    ctx = page_ctx(
+        request,
+        "/gdpr",
+        "GDPR – HP Juridik",
+        "Information om personuppgifter och integritet.",
+    )
+    ctx.update(
         {
-            "request": request,
-            "seo": seo("/gdpr", "GDPR – HP Juridik", "Information om personuppgifter och integritet."),
             "heading": "GDPR",
             "lead": "Information om hur personuppgifter hanteras.",
-            "body": "<p>Fyll på med din GDPR-text.</p>",
-        },
+            "body": (
+                "<p>Kommer snart. Här lägger vi en tydlig policy med kontaktuppgifter, "
+                "laglig grund, lagringstid och rättigheter.</p>"
+            ),
+        }
     )
+    return templates.TemplateResponse("pages/page.html", ctx)
 
 @app.get("/allmanna-villkor", response_class=HTMLResponse)
 def terms(request: Request):
-    return templates.TemplateResponse(
-        "pages/page.html",
+    ctx = page_ctx(
+        request,
+        "/allmanna-villkor",
+        "Allmänna villkor – HP Juridik",
+        "Villkor för tjänster och rådgivning.",
+    )
+    ctx.update(
         {
-            "request": request,
-            "seo": seo("/allmanna-villkor", "Allmänna villkor – HP Juridik", "Villkor för tjänster och rådgivning."),
             "heading": "Allmänna villkor",
             "lead": "Villkor för tjänster och rådgivning.",
-            "body": "<p>Fyll på med dina villkor.</p>",
-        },
+            "body": "<p>Kommer snart. Vi kan skriva en enkel struktur med ansvar, betalning, avbokning och tvistlösning.</p>",
+        }
     )
+    return templates.TemplateResponse("pages/page.html", ctx)
 
 @app.get("/kontakta-oss", response_class=HTMLResponse)
 def contact(request: Request):
-    return templates.TemplateResponse(
-        "pages/contact.html",
-        {
-            "request": request,
-            "seo": seo("/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning."),
-            "sent": False,
-            "error": None,
-        },
+    ctx = page_ctx(
+        request,
+        "/kontakta-oss",
+        "Kontakta oss – HP Juridik",
+        "Kontakta oss för rådgivning.",
     )
+    ctx.update({"sent": False, "error": None, "company": COMPANY})
+    return templates.TemplateResponse("pages/contact.html", ctx)
 
 @app.post("/kontakta-oss", response_class=HTMLResponse)
 def contact_submit(
@@ -181,15 +235,14 @@ def contact_submit(
     namn: str = Form(...),
     epost: str = Form(...),
     meddelande: str = Form(...),
-    telefon: str = Form(""),              # valfritt (funkar även om formuläret inte har fältet)
+    telefon: str = Form(""),
     website: str = Form("", required=False),  # honeypot spam-skydd
 ):
-    # spam -> låtsas OK
+    # Spam -> låtsas OK utan att skicka
     if website:
-        return templates.TemplateResponse(
-            "pages/contact.html",
-            {"request": request, "seo": seo("/kontakta-oss", "Kontakta oss – HP Juridik", ""), "sent": True, "error": None},
-        )
+        ctx = page_ctx(request, "/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning.")
+        ctx.update({"sent": True, "error": None, "company": COMPANY})
+        return templates.TemplateResponse("pages/contact.html", ctx)
 
     error = None
     try:
@@ -197,15 +250,9 @@ def contact_submit(
     except Exception as e:
         error = str(e)
 
-    return templates.TemplateResponse(
-        "pages/contact.html",
-        {
-            "request": request,
-            "seo": seo("/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning."),
-            "sent": error is None,
-            "error": error,
-        },
-    )
+    ctx = page_ctx(request, "/kontakta-oss", "Kontakta oss – HP Juridik", "Kontakta oss för rådgivning.")
+    ctx.update({"sent": error is None, "error": error, "company": COMPANY})
+    return templates.TemplateResponse("pages/contact.html", ctx)
 
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
