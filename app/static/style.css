@@ -1,14 +1,38 @@
-body {
-    font-family: Arial, sans-serif;
-    margin: 0;
-    padding: 0;
-}
+:root { --border:#e5e7eb; --text:#111827; --muted:#6b7280; }
 
-header {
-    padding: 20px;
-    border-bottom: 1px solid #ddd;
-}
+*{ box-sizing:border-box; }
+body{ margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; color:var(--text); background:#fff; }
 
-section {
-    padding: 40px 20px;
-}
+.container{ max-width: 1100px; margin:0 auto; padding: 18px; }
+
+.header{ position:sticky; top:0; background:#fff; border-bottom:1px solid var(--border); z-index:10; }
+.header-inner{ display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.logo{ font-weight:800; text-decoration:none; color:var(--text); }
+.nav{ display:flex; gap:14px; flex-wrap:wrap; }
+.nav a{ text-decoration:none; color:var(--muted); font-size:14px; }
+.nav a:hover{ color:var(--text); }
+
+.hero{ padding: 40px 0 60px; }
+.hero-card{ border:1px solid var(--border); border-radius:18px; padding:24px; box-shadow: 0 6px 22px rgba(0,0,0,0.06); }
+h1{ font-size: clamp(28px, 3vw, 44px); margin: 0 0 10px; }
+p{ color:var(--muted); margin:0 0 16px; line-height:1.5; }
+
+.bullets{ margin:0 0 18px; padding-left: 18px; }
+.bullets li{ margin: 8px 0; }
+
+.cta{ display:flex; gap:10px; flex-wrap:wrap; }
+.btn{ display:inline-block; padding:10px 14px; border-radius:12px; border:1px solid var(--text); text-decoration:none; color:#fff; background:var(--text); cursor:pointer; }
+.btn.ghost{ background:#fff; color:var(--text); border-color: var(--border); }
+
+.page{ padding: 26px 0 60px; }
+.prose p, .prose li{ line-height: 1.7; }
+.muted{ color: var(--muted); }
+
+.form{ display:grid; gap:12px; max-width:520px; }
+input, textarea{ width:100%; padding:10px 12px; border-radius:12px; border:1px solid var(--border); font: inherit; }
+
+.footer{ border-top:1px solid var(--border); margin-top:40px; padding:18px 0; }
+.footer-inner{ display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+.footer-links{ display:flex; gap:12px; }
+.footer a{ color: var(--muted); text-decoration:none; font-size:14px; }
+.footer a:hover{ color: var(--text); }
