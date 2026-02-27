@@ -1,37 +1,128 @@
 {% extends "base.html" %}
     {% block content %}
 
-    <section id="hem" class="section hero">
-      <div class="container">
-        <div class="card hero-card">
-          <div class="hero-text">
-            <h1>20 min gratis rådgivning</h1>
-            <p class="lead">Personlig, trygg och värdeskapande juridik för privatpersoner och företag.</p>
+   <section id="hem" class="section hero">
+  <div class="container">
 
-            <ul class="bullets">
-              <li>Ansvarsförsäkring via Folksam sedan 2020</li>
-              <li>Rättsskydds- och rättshjälpsärenden</li>
-              <li>Avtalsrätt, familjerätt, arbetsrätt, fordringsrätt</li>
-              <li>Boutredningar & bodelningar</li>
-              <li>Inga krav på vidare köp</li>
-            </ul>
+    <div class="hero-wrap">
+      <!-- VÄNSTER: Copy -->
+      <div class="hero-copy">
+        <div class="pill-row">
+          <span class="pill">20 min gratis första bedömning</span>
+          <span class="pill pill-accent">Återkoppling inom 24 timmar</span>
+        </div>
 
-            <div class="cta-row">
-              <a class="btn-primary" href="/#kontakta-oss">Boka rådgivning</a>
-              <a class="btn-secondary" href="/#tjanster">Se tjänster</a>
+        <h1>Juridisk rådgivning som känns trygg – och blir tydlig.</h1>
+        <p class="hero-lead">
+          Personlig, värdeskapande juridik för privatpersoner och företag. Vi hjälper dig att
+          förstå läget, välja rätt väg och agera i tid.
+        </p>
+
+        <div class="hero-points">
+          <div class="point">
+            <div class="point-ic">✓</div>
+            <div>
+              <strong>Ansvarsförsäkring</strong>
+              <div class="muted">Via Folksam sedan 2020</div>
+            </div>
+          </div>
+
+          <div class="point">
+            <div class="point-ic">✓</div>
+            <div>
+              <strong>Rättsskydd & rättshjälp</strong>
+              <div class="muted">Vi hjälper dig navigera processen</div>
+            </div>
+          </div>
+
+          <div class="point">
+            <div class="point-ic">✓</div>
+            <div>
+              <strong>Avtal • Familj • Arbete • Fordran</strong>
+              <div class="muted">Praktisk rådgivning, tydliga nästa steg</div>
             </div>
           </div>
         </div>
-      </div>
-    </section>
 
-    <section id="om-oss" class="section">
-      <div class="container">
-        <h2>Om oss</h2>
-        <p class="muted">
-          Här lägger du din presentation. Vi kan lägga in din bild, meriter och tydlig specialisering.
-        </p>
+        <div class="hero-mini">
+          <div class="mini-card">
+            <div class="mini-top">📍 Lund</div>
+            <div class="muted">Karl XI gata 21</div>
+          </div>
+          <div class="mini-card">
+            <div class="mini-top">☎ 076-317 12 84</div>
+            <div class="muted">Mån–Fre 08–18</div>
+          </div>
+          <div class="mini-card">
+            <div class="mini-top">✉ hp@hpjuridik.se</div>
+            <div class="muted">Svar normalt inom 24h</div>
+          </div>
+        </div>
       </div>
+
+      <!-- HÖGER: Form -->
+      <aside class="hero-form">
+        <div class="form-card">
+          <div class="form-head">
+            <h2>Kontakta oss</h2>
+            <p class="muted">Beskriv kort vad det gäller så återkommer vi normalt inom 24 timmar.</p>
+          </div>
+
+          {% if sent %}
+            <div class="success-box">
+              <strong>Tack!</strong> Vi återkommer så snart som möjligt.
+            </div>
+          {% endif %}
+
+          {% if error %}
+            <div class="error-box">
+              <strong>Det gick inte att skicka just nu.</strong><br>
+              Mejla oss på <strong>hp@hpjuridik.se</strong>.
+              <div class="error-detail">{{ error }}</div>
+            </div>
+          {% endif %}
+
+          <form method="post" action="/kontakta-oss" class="nice-form">
+            <input type="text" name="website" style="display:none" />
+
+            <div class="two-col">
+              <div class="form-group">
+                <label for="namn">Namn</label>
+                <input type="text" id="namn" name="namn" placeholder="Ditt namn" required />
+              </div>
+
+              <div class="form-group">
+                <label for="telefon">Telefon (valfritt)</label>
+                <input type="text" id="telefon" name="telefon" placeholder="076-..." />
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="epost">E-post</label>
+              <input type="email" id="epost" name="epost" placeholder="din@epost.se" required />
+            </div>
+
+            <div class="form-group">
+              <label for="meddelande">Meddelande</label>
+              <textarea id="meddelande" name="meddelande" rows="6" placeholder="Vad behöver du hjälp med?" required></textarea>
+              <div class="form-hint muted">Skriv gärna: vad som hänt, tidslinje och vad du vill uppnå.</div>
+            </div>
+
+            <button type="submit" class="btn-primary btn-wide">
+              Skicka förfrågan
+            </button>
+
+            <div class="form-foot muted">
+              Genom att skicka godkänner du att vi kontaktar dig angående din förfrågan.
+              Se även <a href="/gdpr">GDPR</a>.
+            </div>
+          </form>
+        </div>
+      </aside>
+    </div>
+
+  </div>
+</section>
     </section>
 
     <section id="tjanster" class="section">
