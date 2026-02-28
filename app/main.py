@@ -528,7 +528,7 @@ def lana_bil_submit(
         ctx.update({"sent": False, "error": "Du måste godkänna nyhetsutskick för att fortsätta (gratisversion)."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
-print(f"[lana-bil] disclaimer accepted at={accepted_at} ip={client_ip} ua={ua}")
+    print(f"[lana-bil] disclaimer accepted at={accepted_at} ip={client_ip} ua={ua}")
 
     # Normalisera regnr: uppercase + inga mellanslag
     bil_regnr_norm = "".join((bil_regnr or "").split()).upper()
