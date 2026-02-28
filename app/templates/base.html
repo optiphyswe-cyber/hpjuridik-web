@@ -4,19 +4,35 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-  <title>{{ seo.title if seo else "HP Juridik" }}</title>
+  <!-- TITLE -->
+  <title>
+    {% if seo and seo.title %}
+      {{ seo.title }}
+    {% else %}
+      HP Juridik | Juridisk rådgivning i Lund & Skåne
+    {% endif %}
+  </title>
 
-  {% if seo and seo.description %}
-    <meta name="description" content="{{ seo.description }}" />
-  {% endif %}
+  <!-- DESCRIPTION -->
+  <meta name="description"
+        content="{% if seo and seo.description %}{{ seo.description }}{% else %}Personlig och trygg juridisk rådgivning i Lund och Skåne. 20 min gratis första bedömning.{% endif %}" />
 
-  {% if seo and seo.canonical %}
-    <link rel="canonical" href="{{ seo.canonical }}" />
-  {% endif %}
+  <!-- CANONICAL (FIXAR DUPLICATE-PROBLEMET) -->
+  <link rel="canonical"
+        href="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://www.hpjuridik.se/{% endif %}" />
 
-  {% if seo and seo.robots %}
-    <meta name="robots" content="{{ seo.robots }}" />
-  {% endif %}
+  <!-- ROBOTS -->
+  <meta name="robots"
+        content="{% if seo and seo.robots %}{{ seo.robots }}{% else %}index, follow{% endif %}" />
+
+  <!-- Open Graph -->
+  <meta property="og:title"
+        content="{% if seo and seo.title %}{{ seo.title }}{% else %}HP Juridik | Juridisk rådgivning i Lund & Skåne{% endif %}" />
+  <meta property="og:description"
+        content="{% if seo and seo.description %}{{ seo.description }}{% else %}Personlig och trygg juridisk rådgivning i Lund och Skåne.{% endif %}" />
+  <meta property="og:url"
+        content="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://www.hpjuridik.se/{% endif %}" />
+  <meta property="og:type" content="website" />
 
   <link rel="stylesheet" href="/static/style.css" />
 </head>
