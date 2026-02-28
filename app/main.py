@@ -1,11 +1,13 @@
 import os
-import smtplib
 import io
+import smtplib
+import base64
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.message import EmailMessage
 from email.utils import formataddr
 
+import httpx
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,11 +34,22 @@ templates = Jinja2Templates(directory="app/templates")
 SITE_URL = os.getenv("SITE_URL", "https://hpjuridik-web.onrender.com").rstrip("/")
 NOINDEX = os.getenv("NOINDEX", "1") == "1"
 
+# On Render, SMTP is often blocked. Prefer an email API (Postmark).
+# Set EMAIL_PROVIDER=postmark (recommended) OR smtp
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER", "postmark").lower().strip()
+
+# Postmark (recommended)
+POSTMARK_TOKEN = os.getenv("POSTMARK_TOKEN", "")
+POSTMARK_FROM = os.getenv("POSTMARK_FROM", "")  # e.g. "HP Juridik <info@hpjuridik.se>"
+
+# SMTP (fallback)
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
+
 CONTACT_TO = os.getenv("CONTACT_TO", "hp@hpjuridik.se")
+LEADS_INBOX = os.getenv("LEADS_INBOX", "lanabil@hpjuridik.se")
 
 # -------------------------
 # Company info (single source of truth)
@@ -70,17 +83,91 @@ def page_ctx(request: Request, path: str, title: str, desc: str):
     }
 
 
+def _now_local_str() -> str:
+    return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 # -------------------------
 # Email helpers
 # -------------------------
-def build_email_body(
-    namn: str,
-    epost: str,
-    telefon: str,
-    meddelande: str,
-    request: Request,
-) -> str:
-    ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+def send_email_postmark(*, to_emails: list[str], subject: str, body_text: str, attachments: list[dict] | None = None) -> None:
+    """
+    Send via Postmark API (recommended on Render).
+    Requires:
+      POSTMARK_TOKEN
+      POSTMARK_FROM (e.g. "HP Juridik <info@hpjuridik.se>")
+    """
+    if not POSTMARK_TOKEN or not POSTMARK_FROM:
+        raise RuntimeError("Postmark saknar config: POSTMARK_TOKEN och POSTMARK_FROM måste vara satta.")
+
+    clean = [e.strip() for e in (to_emails or []) if e and e.strip()]
+    if not clean:
+        raise RuntimeError("Inga giltiga mottagaradresser angivna.")
+
+    payload = {
+        "From": POSTMARK_FROM,
+        "To": ", ".join(clean),
+        "Subject": subject,
+        "TextBody": body_text,
+        "MessageStream": "outbound",
+    }
+    if attachments:
+        payload["Attachments"] = attachments
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Postmark-Server-Token": POSTMARK_TOKEN,
+    }
+
+    with httpx.Client(timeout=20) as client:
+        r = client.post("https://api.postmarkapp.com/email", headers=headers, json=payload)
+        if r.status_code >= 300:
+            raise RuntimeError(f"Postmark error {r.status_code}: {r.text}")
+
+
+def send_email_smtp(*, to_emails: list[str], subject: str, body_text: str, pdf_bytes: bytes | None = None, filename: str | None = None) -> None:
+    """SMTP fallback."""
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        raise RuntimeError("SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS).")
+
+    clean = [e.strip() for e in (to_emails or []) if e and e.strip()]
+    if not clean:
+        raise RuntimeError("Inga giltiga mottagaradresser angivna.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
+    msg["To"] = ", ".join(clean)
+    msg.set_content(body_text)
+
+    if pdf_bytes and filename:
+        msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=filename)
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as smtp:
+        smtp.starttls()
+        smtp.login(SMTP_USER, SMTP_PASS)
+        smtp.send_message(msg)
+
+
+def send_agreement_email(*, to_emails: list[str], subject: str, body_text: str, pdf_bytes: bytes, filename: str = "laneavtal-bil.pdf") -> None:
+    """Skickar avtals-PDF som bilaga till angivna mottagare."""
+    if EMAIL_PROVIDER == "postmark":
+        attachments = [{
+            "Name": filename,
+            "Content": base64.b64encode(pdf_bytes).decode("ascii"),
+            "ContentType": "application/pdf",
+        }]
+        return send_email_postmark(to_emails=to_emails, subject=subject, body_text=body_text, attachments=attachments)
+
+    if EMAIL_PROVIDER == "smtp":
+        return send_email_smtp(to_emails=to_emails, subject=subject, body_text=body_text, pdf_bytes=pdf_bytes, filename=filename)
+
+    raise RuntimeError("Ogiltigt EMAIL_PROVIDER. Använd 'postmark' eller 'smtp'.")
+
+
+def build_email_body(namn: str, epost: str, telefon: str, meddelande: str, request: Request) -> str:
+    ts = _now_local_str()
     ip = request.client.host if request.client else "unknown"
     ua = request.headers.get("user-agent", "unknown")
 
@@ -111,31 +198,21 @@ def build_email_body(
     )
 
 
-def send_contact_email(
-    namn: str,
-    epost: str,
-    telefon: str,
-    meddelande: str,
-    request: Request,
-) -> None:
-    # Kräver Render env vars:
-    # SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, CONTACT_TO
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError(
-            "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render)."
-        )
-
+def send_contact_email(namn: str, epost: str, telefon: str, meddelande: str, request: Request) -> None:
     subject = f"HP Juridik | Ny kontaktförfrågan från {namn}"
     body = build_email_body(namn, epost, telefon, meddelande, request)
 
+    if EMAIL_PROVIDER == "postmark":
+        return send_email_postmark(to_emails=[CONTACT_TO], subject=subject, body_text=body)
+
+    # SMTP fallback
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        raise RuntimeError("SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render).")
+
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
-
-    # From måste ofta matcha SMTP_USER för att levereras bra
     msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
     msg["To"] = CONTACT_TO
-
-    # Reply-To så du kan svara direkt till klienten
     msg["Reply-To"] = epost
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
@@ -143,48 +220,49 @@ def send_contact_email(
         server.login(SMTP_USER, SMTP_PASS)
         server.sendmail(SMTP_USER, [CONTACT_TO], msg.as_string())
 
+def notify_lead_inbox(
+    *,
+    request: Request,
+    utlanare_epost: str,
+    lantagare_epost: str,
+    utlanare_namn: str,
+    lantagare_namn: str,
+    marketing_accept: bool,
+) -> None:
+    """
+    Skickar ett internt 'lead'-mail till din inkorg så att du får e-postadresserna.
+    Standard: LEADS_INBOX (default lanabil@hpjuridik.se)
+    """
+    ip = request.client.host if request.client else "unknown"
+    ua = request.headers.get("user-agent", "unknown")
+    ts = _now_local_str()
+
+    subject = "NYTT LEAD – Låna bil (gratis)"
+    body = (
+        "NYTT LEAD (Låna bil – gratis)\n"
+        "====================================\n\n"
+        f"Tid: {ts}\n"
+        f"IP: {ip}\n"
+        f"User-Agent: {ua}\n\n"
+        f"Utlånare: {utlanare_namn}\n"
+        f"Utlånare e-post: {utlanare_epost}\n\n"
+        f"Låntagare: {lantagare_namn}\n"
+        f"Låntagare e-post: {lantagare_epost}\n\n"
+        f"Samtycke nyhetsutskick: {'JA' if marketing_accept else 'NEJ'}\n"
+    )
+
+    # Inga bilagor behövs här – bara en intern notis.
+    if EMAIL_PROVIDER == "postmark":
+        return send_email_postmark(to_emails=[LEADS_INBOX], subject=subject, body_text=body)
+    # SMTP fallback
+    return send_email_smtp(to_emails=[LEADS_INBOX], subject=subject, body_text=body)
+
+
+
 
 # -------------------------
 # PDF helpers (Låna bil)
 # -------------------------
-
-def send_agreement_email(
-    *,
-    to_emails: list[str],
-    subject: str,
-    body: str,
-    pdf_bytes: bytes,
-    filename: str = "laneavtal-bil.pdf",
-) -> None:
-    """Skickar avtals-PDF som bilaga till angivna mottagare."""
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError(
-            "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS)."
-        )
-
-    clean = [e.strip() for e in (to_emails or []) if e and e.strip()]
-    if not clean:
-        raise RuntimeError("Inga giltiga mottagaradresser angivna.")
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
-    msg["To"] = ", ".join(clean)
-    msg.set_content(body)
-
-    msg.add_attachment(
-        pdf_bytes,
-        maintype="application",
-        subtype="pdf",
-        filename=filename,
-    )
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(SMTP_USER, SMTP_PASS)
-        smtp.send_message(msg)
-
-
 def _safe(s: str) -> str:
     return (s or "").strip()
 
@@ -207,7 +285,6 @@ def build_loan_pdf(
     ort: str = "Lund",
 ) -> bytes:
     """Skapar ett tillfälligt låneavtal – bil och returnerar PDF som bytes."""
-
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -222,35 +299,10 @@ def build_loan_pdf(
 
     styles = getSampleStyleSheet()
 
-    title = ParagraphStyle(
-        "Title",
-        parent=styles["Title"],
-        fontSize=18,
-        leading=22,
-        spaceAfter=10,
-    )
-    h = ParagraphStyle(
-        "H",
-        parent=styles["Heading2"],
-        fontSize=12.5,
-        leading=15,
-        spaceBefore=10,
-        spaceAfter=6,
-    )
-    body = ParagraphStyle(
-        "Body",
-        parent=styles["BodyText"],
-        fontSize=10.5,
-        leading=14,
-        spaceAfter=6,
-    )
-    small = ParagraphStyle(
-        "Small",
-        parent=styles["BodyText"],
-        fontSize=9.5,
-        leading=12.5,
-        spaceAfter=4,
-    )
+    title = ParagraphStyle("Title", parent=styles["Title"], fontSize=18, leading=22, spaceAfter=10)
+    h = ParagraphStyle("H", parent=styles["Heading2"], fontSize=12.5, leading=15, spaceBefore=10, spaceAfter=6)
+    body = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=10.5, leading=14, spaceAfter=6)
+    small = ParagraphStyle("Small", parent=styles["BodyText"], fontSize=9.5, leading=12.5, spaceAfter=4)
 
     def P(text: str, st=body):
         text = _safe(text).replace("\n", "<br/>")
@@ -260,41 +312,22 @@ def build_loan_pdf(
 
     # 1) Titel
     story.append(Paragraph("TILLFÄLLIGT LÅNEAVTAL – BIL", title))
-    story.append(
-        P(
-            "Detta avtal upprättas för att tydliggöra villkoren för ett tidsbegränsat lån av fordon.",
-            small,
-        )
-    )
+    story.append(P("Detta avtal upprättas för att tydliggöra villkoren för ett tidsbegränsat lån av fordon.", small))
     story.append(Spacer(1, 6))
 
     # 2) Parter
     story.append(Paragraph("Parter", h))
 
-    ut_pnr = (
-        f", personnummer: {_safe(utlanare.get('pnr'))}" if _safe(utlanare.get("pnr")) else ""
-    )
-    la_pnr = (
-        f", personnummer: {_safe(lantagare.get('pnr'))}" if _safe(lantagare.get("pnr")) else ""
-    )
+    ut_pnr = f", personnummer: {_safe(utlanare.get('pnr'))}" if _safe(utlanare.get("pnr")) else ""
+    la_pnr = f", personnummer: {_safe(lantagare.get('pnr'))}" if _safe(lantagare.get("pnr")) else ""
 
     story.append(P(f"<b>Utlånare (ägare):</b> {_safe(utlanare.get('namn'))}{ut_pnr}", body))
     story.append(P(f"Adress: {_safe(utlanare.get('adress'))}", body))
-    story.append(
-        P(
-            f"Telefon: {_safe(utlanare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(utlanare.get('epost'))}",
-            body,
-        )
-    )
+    story.append(P(f"Telefon: {_safe(utlanare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(utlanare.get('epost'))}", body))
     story.append(Spacer(1, 4))
     story.append(P(f"<b>Låntagare (skuldsatt):</b> {_safe(lantagare.get('namn'))}{la_pnr}", body))
     story.append(P(f"Adress: {_safe(lantagare.get('adress'))}", body))
-    story.append(
-        P(
-            f"Telefon: {_safe(lantagare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(lantagare.get('epost'))}",
-            body,
-        )
-    )
+    story.append(P(f"Telefon: {_safe(lantagare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(lantagare.get('epost'))}", body))
 
     # 3) Fordon
     story.append(Paragraph("Fordon", h))
@@ -316,22 +349,16 @@ def build_loan_pdf(
 
     # 6) Bakgrund och syfte
     story.append(Paragraph("Bakgrund och syfte med avtalet", h))
-    story.append(
-        P(
-            "Syftet med detta avtal är att dokumentera att utlåningen är tillfällig, att fordonet fortsatt tillhör utlånaren "
-            "och att låntagaren nyttjar fordonet inom ramen för nedanstående villkor. Avtalet kan användas som underlag "
-            "för att visa att fordonet inte överlåtits utan endast lånats ut under begränsad tid.",
-            body,
-        )
-    )
-
-    # Friskrivning (bevisunderlag, ingen garanti för visst utfall)
-    story.append(
-        P(
-            "Detta avtal är ett standardiserat bevisunderlag baserat på parternas uppgifter och innebär ingen garanti för visst utfall vid myndighetsprövning eller tvist.",
-            small,
-        )
-    )
+    story.append(P(
+        "Syftet med detta avtal är att dokumentera att utlåningen är tillfällig, att fordonet fortsatt tillhör utlånaren "
+        "och att låntagaren nyttjar fordonet inom ramen för nedanstående villkor. Avtalet kan användas som underlag "
+        "för att visa att fordonet inte överlåtits utan endast lånats ut under begränsad tid.",
+        body
+    ))
+    story.append(P(
+        "Detta avtal är ett standardiserat bevisunderlag baserat på parternas uppgifter och innebär ingen garanti för visst utfall vid myndighetsprövning eller tvist.",
+        small
+    ))
 
     # 7) Villkor 1–6
     story.append(Paragraph("Villkor", h))
@@ -358,26 +385,21 @@ def build_loan_pdf(
 
     # 10) Underskrifter
     story.append(Spacer(1, 14))
-
     sig_data = [
         ["______________________________", "______________________________"],
         ["Utlånare (ägare)", "Låntagare (skuldsatt)"],
         [f"Namn: {_safe(utlanare.get('namn'))}", f"Namn: {_safe(lantagare.get('namn'))}"],
     ]
     sig_table = Table(sig_data, colWidths=[85 * mm, 85 * mm])
-    sig_table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("LINEBELOW", (0, 0), (0, 0), 0, colors.white),
-                ("LINEBELOW", (1, 0), (1, 0), 0, colors.white),
-            ]
-        )
-    )
+    sig_table.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("LINEBELOW", (0, 0), (0, 0), 0, colors.white),
+        ("LINEBELOW", (1, 0), (1, 0), 0, colors.white),
+    ]))
     story.append(sig_table)
 
     doc.build(story)
@@ -396,17 +418,6 @@ def home(request: Request):
         "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
     )
     return templates.TemplateResponse("pages/home.html", ctx)
-
-
-@app.get("/gdpr", response_class=HTMLResponse)
-def gdpr(request: Request):
-    ctx = page_ctx(
-        request,
-        "/gdpr",
-        "GDPR – HP Juridik",
-        "Information om personuppgifter och integritet.",
-    )
-    return templates.TemplateResponse("pages/gdpr.html", ctx)
 
 
 @app.get("/allmanna-villkor", response_class=HTMLResponse)
@@ -446,7 +457,6 @@ def contact_submit(
     except Exception as e:
         error = str(e)
 
-    # Returnera startsidan (one-page) med status-rutor i kontaktsektionen
     ctx = page_ctx(
         request,
         "/",
@@ -457,7 +467,7 @@ def contact_submit(
     return templates.TemplateResponse("pages/home.html", ctx)
 
 
-# --- NYTT: Låna bil till skuldsatt ---
+# --- Låna bil till skuldsatt ---
 @app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
 def lana_bil_form(request: Request):
     ctx = page_ctx(
@@ -489,6 +499,7 @@ def lana_bil_submit(
     to_dt: str = Form(...),
     andamal: str = Form(...),
     disclaimer_accept: str = Form(None),
+    marketing_accept: str = Form(None),
 ):
     # Måste godkänna friskrivningsvillkor innan PDF skapas
     if not disclaimer_accept:
@@ -501,11 +512,23 @@ def lana_bil_submit(
         ctx.update({"sent": False, "error": "Du måste godkänna friskrivningsvillkoret för att fortsätta."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
-    # (Valfritt men bra) logga godkännandet i serverlogg
+    # logga godkännandet
     client_ip = request.client.host if request.client else "unknown"
     accepted_at = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
     ua = request.headers.get("user-agent", "unknown")
-    print(f"[lana-bil] disclaimer accepted at={accepted_at} ip={client_ip} ua={ua}")
+    
+    # För gratisflödet: samtycke att spara e-post för nyhetsutskick (obligatoriskt enligt din önskan)
+    if not marketing_accept:
+        ctx = page_ctx(
+            request,
+            "/lana-bil-till-skuldsatt",
+            "Låna bil till skuldsatt | HP Juridik",
+            "Skapa ett tillfälligt låneavtal för bil som PDF.",
+        )
+        ctx.update({"sent": False, "error": "Du måste godkänna nyhetsutskick för att fortsätta (gratisversion)."})
+        return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
+
+print(f"[lana-bil] disclaimer accepted at={accepted_at} ip={client_ip} ua={ua}")
 
     # Normalisera regnr: uppercase + inga mellanslag
     bil_regnr_norm = "".join((bil_regnr or "").split()).upper()
@@ -534,6 +557,7 @@ def lana_bil_submit(
         ctx.update({"sent": False, "error": "Till-datum/tid måste vara efter Från-datum/tid."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
+    # Bygg PDF
     pdf_bytes = build_loan_pdf(
         utlanare={
             "namn": utlanare_namn,
@@ -558,6 +582,52 @@ def lana_bil_submit(
         andamal=andamal,
         ort="Lund",
     )
+
+    # Skicka mail till båda parter innan vi returnerar PDF
+    subject = "Låneavtal bil – PDF"
+    body_text = (
+        "Hej!\n\n"
+        "Här kommer ert tillfälliga låneavtal för bil som PDF.\n\n"
+        "Observera: Avtalet är ett bevisunderlag och innebär ingen garanti för visst utfall vid myndighetsprövning.\n\n"
+        f"Skapat: {_now_local_str()}\n\n"
+        "Vänligen,\nHP Juridik"
+    )
+
+    print(f"[lana-bil] attempting email provider={EMAIL_PROVIDER} to={utlanare_epost},{lantagare_epost}")
+    try:
+        send_agreement_email(
+            to_emails=[utlanare_epost, lantagare_epost],
+            subject=subject,
+            body_text=body_text,
+            pdf_bytes=pdf_bytes,
+            filename="laneavtal-bil.pdf",
+        )
+        print("[lana-bil] email sent OK")
+        # Skicka även en intern notis till din inkorg med e-postadresserna (lead)
+        try:
+            notify_lead_inbox(
+                request=request,
+                utlanare_epost=utlanare_epost,
+                lantagare_epost=lantagare_epost,
+                utlanare_namn=utlanare_namn,
+                lantagare_namn=lantagare_namn,
+                marketing_accept=True,
+            )
+            print(f"[lana-bil] lead sent to inbox={LEADS_INBOX}")
+        except Exception as e2:
+            # ska inte stoppa kunden – bara logga
+            print("[lana-bil] lead FAILED:", repr(e2))
+
+    except Exception as e:
+        print("[lana-bil] email FAILED:", repr(e))
+        ctx = page_ctx(
+            request,
+            "/lana-bil-till-skuldsatt",
+            "Låna bil till skuldsatt | HP Juridik",
+            "Skapa ett tillfälligt låneavtal för bil som PDF.",
+        )
+        ctx.update({"sent": False, "error": f"PDF skapades men kunde inte mejlas: {e}"})
+        return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=500)
 
     filename = "laneavtal-bil.pdf"
     return StreamingResponse(
