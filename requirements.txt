@@ -2,4 +2,6 @@ fastapi
 uvicorn[standard]
 jinja2
 python-multipart
-reportlab==4.0.9
+reportlab
+httpx
+stripe
