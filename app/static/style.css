@@ -1283,3 +1283,17 @@ html {
     width: 100%;
   }
 }
+/* Logo under menyn */
+.logo-banner{
+  text-align: center;
+  padding: 25px 0 10px;
+  background: #fff;
+}
+
+.main-logo{
+  max-width: 300px;   /* ändra denna siffra om du vill ha större/mindre */
+  width: 80%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
