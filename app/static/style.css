@@ -1184,3 +1184,102 @@ html {
   max-width: 320px; /* ändra för större/mindre */
   height: auto;
 }
+/* Logo under menyn */
+.logo-banner{
+  text-align: center;
+  padding: 40px 0 20px;
+  background: #fff;
+}
+
+.main-logo{
+  width: min(520px, 92%);
+  height: auto;
+  display: inline-block;
+}
+
+/* Cookie banner (HP-stil) */
+.cookie-banner{
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 9999;
+  display: none;
+}
+
+.cookie-banner.is-visible{ display:block; }
+
+.cookie-card{
+  max-width: 1100px;
+  margin: 0 auto;
+  background: #fff;
+  border: 1px solid #e6e8ee;
+  border-radius: 18px;
+  padding: 16px 18px;
+  box-shadow: 0 18px 50px rgba(15, 23, 42, 0.10);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cookie-title{
+  font-weight: 700;
+  font-size: 14px;
+  color: #0f172a;
+  margin-bottom: 6px;
+}
+
+.cookie-muted{
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cookie-muted a{
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.cookie-actions{
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.cookie-btn{
+  border: 1px solid transparent;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform .05s ease, opacity .15s ease;
+}
+.cookie-btn:active{ transform: translateY(1px); }
+
+.cookie-btn-ghost{
+  background: #f1f5f9;
+  border-color: #e6e8ee;
+  color: #0f172a;
+}
+
+.cookie-btn-primary{
+  background: #0b1220;
+  color: #fff;
+}
+
+@media (max-width: 720px){
+  .cookie-card{
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .cookie-actions{
+    width: 100%;
+  }
+  .cookie-actions .cookie-btn{
+    width: 100%;
+  }
+}
