@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block content %}
+
+<section class="section">
+  <div class="container">
+
+    <div class="cases-head">
+      <h1>Låna bil till skuldsatt</h1>
+      <p class="muted">
+        Fyll i uppgifterna nedan så skapar vi ett tillfälligt låneavtal för bil.
+      </p>
+    </div>
+
+    {% if sent %}
+      <div class="success-box">
+        <strong>Klart!</strong> Avtalet är skapat.
+      </div>
+    {% endif %}
+
+    {% if error %}
+      <div class="error-box">
+        <strong>Något gick fel.</strong>
+        <div class="error-detail">{{ error }}</div>
+      </div>
+    {% endif %}
+
+    <div class="form-card" style="max-width: 900px; margin: 0 auto;">
+      <form method="post" action="/lana-bil-till-skuldsatt" class="nice-form">
+
+        <h2 style="margin-top:0;">Utlånare (ägare)</h2>
+        <div class="two-col">
+          <div class="form-group">
+            <label for="utlanare_namn">Namn</label>
+            <input id="utlanare_namn" name="utlanare_namn" required>
+          </div>
+          <div class="form-group">
+            <label for="utlanare_pnr">Personnummer (valfritt)</label>
+            <input id="utlanare_pnr" name="utlanare_pnr" placeholder="ÅÅÅÅMMDD-XXXX">
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="form-group">
+            <label for="utlanare_adress">Adress</label>
+            <input id="utlanare_adress" name="utlanare_adress" required>
+          </div>
+          <div class="form-group">
+            <label for="utlanare_tel">Telefon</label>
+            <input id="utlanare_tel" name="utlanare_tel" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="utlanare_epost">E-post</label>
+          <input type="email" id="utlanare_epost" name="utlanare_epost" required>
+        </div>
+
+        <hr style="margin:24px 0;">
+
+        <h2>Låntagare (skuldsatt)</h2>
+        <div class="two-col">
+          <div class="form-group">
+            <label for="lantagare_namn">Namn</label>
+            <input id="lantagare_namn" name="lantagare_namn" required>
+          </div>
+          <div class="form-group">
+            <label for="lantagare_pnr">Personnummer (valfritt)</label>
+            <input id="lantagare_pnr" name="lantagare_pnr" placeholder="ÅÅÅÅMMDD-XXXX">
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="form-group">
+            <label for="lantagare_adress">Adress</label>
+            <input id="lantagare_adress" name="lantagare_adress" required>
+          </div>
+          <div class="form-group">
+            <label for="lantagare_tel">Telefon</label>
+            <input id="lantagare_tel" name="lantagare_tel" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="lantagare_epost">E-post</label>
+          <input type="email" id="lantagare_epost" name="lantagare_epost" required>
+        </div>
+
+        <hr style="margin:24px 0;">
+
+        <h2>Fordon</h2>
+        <div class="two-col">
+          <div class="form-group">
+            <label for="bil_marke_modell">Märke och modell</label>
+            <input id="bil_marke_modell" name="bil_marke_modell" required placeholder="t.ex. Nissan Qashqai">
+          </div>
+          <div class="form-group">
+            <label for="bil_regnr">Registreringsnummer</label>
+            <input id="bil_regnr" name="bil_regnr" required placeholder="t.ex. ABC123">
+          </div>
+        </div>
+
+        <hr style="margin:24px 0;">
+
+        <h2>Avtalsperiod</h2>
+        <div class="two-col">
+          <div class="form-group">
+            <label for="from_dt">Från (datum & tid)</label>
+            <input type="datetime-local" id="from_dt" name="from_dt" required>
+          </div>
+          <div class="form-group">
+            <label for="to_dt">Till (datum & tid)</label>
+            <input type="datetime-local" id="to_dt" name="to_dt" required>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="andamal">Ändamål / syfte</label>
+          <textarea id="andamal" name="andamal" rows="5" required
+            placeholder="Beskriv varför bilen lånas. Skriv gärna ett syfte som gynnar utlånaren (t.ex. hämta medicin, hjälpa till med ärenden, transport, service etc.)."></textarea>
+        </div>
+
+        <button type="submit" class="btn-primary btn-wide">
+          Skapa låneavtal (PDF)
+        </button>
+
+        <p class="muted" style="margin-top:12px;">
+          Nästa steg: möjlighet att signera med BankID (tilläggstjänst).
+        </p>
+
+      </form>
+    </div>
+
+  </div>
+</section>
+
+{% endblock %}
