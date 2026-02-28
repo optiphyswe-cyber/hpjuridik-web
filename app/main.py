@@ -3,6 +3,7 @@ import smtplib
 import io
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
+from email.message import EmailMessage
 from email.utils import formataddr
 
 from fastapi import FastAPI, Request, Form
@@ -146,6 +147,44 @@ def send_contact_email(
 # -------------------------
 # PDF helpers (Låna bil)
 # -------------------------
+
+def send_agreement_email(
+    *,
+    to_emails: list[str],
+    subject: str,
+    body: str,
+    pdf_bytes: bytes,
+    filename: str = "laneavtal-bil.pdf",
+) -> None:
+    """Skickar avtals-PDF som bilaga till angivna mottagare."""
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        raise RuntimeError(
+            "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS)."
+        )
+
+    clean = [e.strip() for e in (to_emails or []) if e and e.strip()]
+    if not clean:
+        raise RuntimeError("Inga giltiga mottagaradresser angivna.")
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
+    msg["To"] = ", ".join(clean)
+    msg.set_content(body)
+
+    msg.add_attachment(
+        pdf_bytes,
+        maintype="application",
+        subtype="pdf",
+        filename=filename,
+    )
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
+        smtp.starttls()
+        smtp.login(SMTP_USER, SMTP_PASS)
+        smtp.send_message(msg)
+
+
 def _safe(s: str) -> str:
     return (s or "").strip()
 
