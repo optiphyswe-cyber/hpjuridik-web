@@ -1297,3 +1297,21 @@ html {
   display: block;
   margin: 0 auto;
 }
+.info-box {
+  background: #f8f9fb;
+  padding: 24px;
+  border-radius: 8px;
+  border: 1px solid #e3e6ec;
+}
+
+.info-box h2 {
+  margin-top: 0;
+}
+
+.info-box h3 {
+  margin-top: 18px;
+}
+
+.info-box ul {
+  margin-left: 20px;
+}
