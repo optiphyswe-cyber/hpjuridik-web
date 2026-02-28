@@ -1174,3 +1174,13 @@ html {
   max-height: 100%;
   object-fit: contain;
 }
+.site-header {
+  background: #fff;
+  padding: 24px 0 8px 0;
+  text-align: center;
+}
+
+.site-logo {
+  max-width: 320px; /* ändra för större/mindre */
+  height: auto;
+}
