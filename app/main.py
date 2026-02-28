@@ -5,11 +5,19 @@ from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from email.message import EmailMessage
 from email.utils import formataddr
+from typing import List
 
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    PlainTextResponse,
+    StreamingResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import RedirectResponse
 
 # PDF (ReportLab)
 from reportlab.lib.pagesizes import A4
@@ -29,8 +37,9 @@ templates = Jinja2Templates(directory="app/templates")
 # -------------------------
 # Environment / settings
 # -------------------------
-SITE_URL = os.getenv("SITE_URL", "https://hpjuridik-web.onrender.com").rstrip("/")
-NOINDEX = os.getenv("NOINDEX", "1") == "1"
+# Viktigt: Canonical ska vara www-versionen (detta löser duplicate-problemet)
+CANONICAL_HOST = os.getenv("CANONICAL_HOST", "www.hpjuridik.se").strip().lower()
+SITE_URL = os.getenv("SITE_URL", f"https://{CANONICAL_HOST}").rstrip("/")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -52,13 +61,45 @@ COMPANY = {
     "orgnr": "559365-2018",
 }
 
+# -------------------------
+# Middleware: force https + force www (canonical host)
+# -------------------------
+class CanonicalRedirectMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        # Render skickar ofta X-Forwarded-Proto
+        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).lower()
+        host = (request.headers.get("x-forwarded-host") or request.url.hostname or "").lower()
 
+        # Behåll path + query
+        path = request.url.path
+        query = request.url.query
+        suffix = f"?{query}" if query else ""
+
+        # 1) Tvinga https
+        if proto != "https":
+            target = f"https://{host}{path}{suffix}"
+            return RedirectResponse(url=target, status_code=301)
+
+        # 2) Tvinga canonical host (www)
+        if host and host != CANONICAL_HOST:
+            target = f"https://{CANONICAL_HOST}{path}{suffix}"
+            return RedirectResponse(url=target, status_code=301)
+
+        return await call_next(request)
+
+app.add_middleware(CanonicalRedirectMiddleware)
+
+# -------------------------
+# SEO helpers
+# -------------------------
 def seo(path: str, title: str, description: str):
+    # Alltid canonical till www + korrekt path
+    canonical_url = f"{SITE_URL}{path}"
     return {
         "title": title,
         "description": description,
-        "canonical": f"{SITE_URL}{path}",
-        "robots": "noindex, nofollow" if NOINDEX else "index, follow",
+        "canonical": canonical_url,
+        "robots": "index, follow",
     }
 
 
@@ -68,7 +109,6 @@ def page_ctx(request: Request, path: str, title: str, desc: str):
         "seo": seo(path, title, desc),
         "company": COMPANY,
     }
-
 
 # -------------------------
 # Email helpers
@@ -118,8 +158,6 @@ def send_contact_email(
     meddelande: str,
     request: Request,
 ) -> None:
-    # Kräver Render env vars:
-    # SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, CONTACT_TO
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
         raise RuntimeError(
             "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render)."
@@ -130,12 +168,8 @@ def send_contact_email(
 
     msg = MIMEText(body, "plain", "utf-8")
     msg["Subject"] = subject
-
-    # From måste ofta matcha SMTP_USER för att levereras bra
-    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
+    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))  # bör matcha SMTP_USER
     msg["To"] = CONTACT_TO
-
-    # Reply-To så du kan svara direkt till klienten
     msg["Reply-To"] = epost
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
@@ -143,24 +177,19 @@ def send_contact_email(
         server.login(SMTP_USER, SMTP_PASS)
         server.sendmail(SMTP_USER, [CONTACT_TO], msg.as_string())
 
-
 # -------------------------
 # PDF helpers (Låna bil)
 # -------------------------
-
 def send_agreement_email(
     *,
-    to_emails: list[str],
+    to_emails: List[str],
     subject: str,
     body: str,
     pdf_bytes: bytes,
     filename: str = "laneavtal-bil.pdf",
 ) -> None:
-    """Skickar avtals-PDF som bilaga till angivna mottagare."""
     if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError(
-            "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS)."
-        )
+        raise RuntimeError("SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS).")
 
     clean = [e.strip() for e in (to_emails or []) if e and e.strip()]
     if not clean:
@@ -172,12 +201,7 @@ def send_agreement_email(
     msg["To"] = ", ".join(clean)
     msg.set_content(body)
 
-    msg.add_attachment(
-        pdf_bytes,
-        maintype="application",
-        subtype="pdf",
-        filename=filename,
-    )
+    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=filename)
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
         smtp.starttls()
@@ -206,8 +230,6 @@ def build_loan_pdf(
     andamal: str,
     ort: str = "Lund",
 ) -> bytes:
-    """Skapar ett tillfälligt låneavtal – bil och returnerar PDF som bytes."""
-
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
         buf,
@@ -222,99 +244,48 @@ def build_loan_pdf(
 
     styles = getSampleStyleSheet()
 
-    title = ParagraphStyle(
-        "Title",
-        parent=styles["Title"],
-        fontSize=18,
-        leading=22,
-        spaceAfter=10,
-    )
-    h = ParagraphStyle(
-        "H",
-        parent=styles["Heading2"],
-        fontSize=12.5,
-        leading=15,
-        spaceBefore=10,
-        spaceAfter=6,
-    )
-    body = ParagraphStyle(
-        "Body",
-        parent=styles["BodyText"],
-        fontSize=10.5,
-        leading=14,
-        spaceAfter=6,
-    )
-    small = ParagraphStyle(
-        "Small",
-        parent=styles["BodyText"],
-        fontSize=9.5,
-        leading=12.5,
-        spaceAfter=4,
-    )
+    title = ParagraphStyle("Title", parent=styles["Title"], fontSize=18, leading=22, spaceAfter=10)
+    h = ParagraphStyle("H", parent=styles["Heading2"], fontSize=12.5, leading=15, spaceBefore=10, spaceAfter=6)
+    body = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=10.5, leading=14, spaceAfter=6)
+    small = ParagraphStyle("Small", parent=styles["BodyText"], fontSize=9.5, leading=12.5, spaceAfter=4)
 
     def P(text: str, st=body):
         text = _safe(text).replace("\n", "<br/>")
         return Paragraph(text, st)
 
     story = []
-
-    # 1) Titel
     story.append(Paragraph("TILLFÄLLIGT LÅNEAVTAL – BIL", title))
-    story.append(
-        P(
-            "Detta avtal upprättas för att tydliggöra villkoren för ett tidsbegränsat lån av fordon.",
-            small,
-        )
-    )
+    story.append(P("Detta avtal upprättas för att tydliggöra villkoren för ett tidsbegränsat lån av fordon.", small))
     story.append(Spacer(1, 6))
 
-    # 2) Parter
     story.append(Paragraph("Parter", h))
 
-    ut_pnr = (
-        f", personnummer: {_safe(utlanare.get('pnr'))}" if _safe(utlanare.get("pnr")) else ""
-    )
-    la_pnr = (
-        f", personnummer: {_safe(lantagare.get('pnr'))}" if _safe(lantagare.get("pnr")) else ""
-    )
+    ut_pnr = f", personnummer: {_safe(utlanare.get('pnr'))}" if _safe(utlanare.get("pnr")) else ""
+    la_pnr = f", personnummer: {_safe(lantagare.get('pnr'))}" if _safe(lantagare.get("pnr")) else ""
 
     story.append(P(f"<b>Utlånare (ägare):</b> {_safe(utlanare.get('namn'))}{ut_pnr}", body))
     story.append(P(f"Adress: {_safe(utlanare.get('adress'))}", body))
-    story.append(
-        P(
-            f"Telefon: {_safe(utlanare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(utlanare.get('epost'))}",
-            body,
-        )
-    )
+    story.append(P(f"Telefon: {_safe(utlanare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(utlanare.get('epost'))}", body))
     story.append(Spacer(1, 4))
     story.append(P(f"<b>Låntagare (skuldsatt):</b> {_safe(lantagare.get('namn'))}{la_pnr}", body))
     story.append(P(f"Adress: {_safe(lantagare.get('adress'))}", body))
-    story.append(
-        P(
-            f"Telefon: {_safe(lantagare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(lantagare.get('epost'))}",
-            body,
-        )
-    )
+    story.append(P(f"Telefon: {_safe(lantagare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(lantagare.get('epost'))}", body))
 
-    # 3) Fordon
     story.append(Paragraph("Fordon", h))
     story.append(P(f"Märke och modell: {_safe(fordon.get('marke_modell'))}", body))
     story.append(P(f"Registreringsnummer: {_safe(fordon.get('regnr'))}", body))
     if _safe(fordon.get("agare")):
         story.append(P(f"Ägare: {_safe(fordon.get('agare'))}", body))
 
-    # 4) Avtalsperiod
     story.append(Paragraph("Avtalsperiod", h))
     from_dt = period["from"]
     to_dt = period["to"]
     story.append(P(f"Från: {_sv_dt(from_dt)}", body))
     story.append(P(f"Till: {_sv_dt(to_dt)}", body))
 
-    # 5) Ändamål
     story.append(Paragraph("Ändamål med lånet", h))
     story.append(P(andamal, body))
 
-    # 6) Bakgrund och syfte
     story.append(Paragraph("Bakgrund och syfte med avtalet", h))
     story.append(
         P(
@@ -324,41 +295,29 @@ def build_loan_pdf(
             body,
         )
     )
+    story.append(P("Detta avtal är ett standardiserat bevisunderlag baserat på parternas uppgifter.", small))
 
-    # Friskrivning (bevisunderlag, ingen garanti för visst utfall)
-    story.append(
-        P(
-            "Detta avtal är ett standardiserat bevisunderlag baserat på parternas uppgifter och innebär ingen garanti för visst utfall vid myndighetsprövning eller tvist.",
-            small,
-        )
-    )
-
-    # 7) Villkor 1–6
     story.append(Paragraph("Villkor", h))
     villkor = [
         "Lånet avser endast ovan angivet fordon och gäller enbart under den angivna avtalsperioden.",
         "Låntagaren ansvarar för att fordonet hanteras varsamt och enligt gällande trafik- och försäkringsvillkor.",
-        "Låntagaren ansvarar för kostnader som uppstår under låneperioden, såsom bränsle, trängselskatt, parkeringsavgifter/böter och liknande, om inte annat avtalas skriftligen.",
+        "Låntagaren ansvarar för kostnader som uppstår under låneperioden (bränsle, trängselskatt, parkeringsavgifter/böter m.m.) om inte annat avtalas skriftligen.",
         "Skador eller fel som uppstår under låneperioden ska omedelbart meddelas utlånaren. Låntagaren ansvarar för skador som uppstår genom vårdslöshet eller felaktig användning.",
         "Fordonet får inte överlåtas, lånas ut i andra hand, hyras ut eller användas för olagliga ändamål.",
-        "Utlånaren har rätt att återkalla lånet i förtid vid misstanke om missbruk eller vid väsentligt avtalsbrott. Låntagaren ska då utan dröjsmål återlämna fordonet.",
+        "Utlånaren har rätt att återkalla lånet i förtid vid misstanke om missbruk eller vid väsentligt avtalsbrott.",
     ]
     for i, v in enumerate(villkor, start=1):
         story.append(P(f"<b>{i}.</b> {v}", body))
 
-    # 8) Kopior
     story.append(Paragraph("Kopior", h))
     story.append(P("Avtalet upprättas i två (2) likalydande exemplar där parterna erhåller varsitt.", body))
 
-    # 9) Ort & datum
     story.append(Spacer(1, 6))
     today = datetime.now(timezone.utc).astimezone()
     story.append(P(f"Ort: {_safe(ort)}", body))
     story.append(P(f"Datum: {_sv_date(today)}", body))
 
-    # 10) Underskrifter
     story.append(Spacer(1, 14))
-
     sig_data = [
         ["______________________________", "______________________________"],
         ["Utlånare (ägare)", "Låntagare (skuldsatt)"],
@@ -383,6 +342,37 @@ def build_loan_pdf(
     doc.build(story)
     return buf.getvalue()
 
+# -------------------------
+# SEO endpoints: robots + sitemap
+# -------------------------
+@app.get("/robots.txt", response_class=PlainTextResponse)
+def robots_txt():
+    # Tillåt indexering och peka ut sitemap
+    return f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}/sitemap.xml\n"
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    # Lista viktiga sidor (lägg till fler vid behov)
+    urls = [
+        f"{SITE_URL}/",
+        f"{SITE_URL}/gdpr",
+        f"{SITE_URL}/allmanna-villkor",
+        f"{SITE_URL}/lana-bil-till-skuldsatt",
+    ]
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    xml = ['<?xml version="1.0" encoding="UTF-8"?>',
+           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
+    for u in urls:
+        xml.append("<url>")
+        xml.append(f"<loc>{u}</loc>")
+        xml.append(f"<lastmod>{now}</lastmod>")
+        xml.append("</url>")
+    xml.append("</urlset>")
+
+    return Response(content="\n".join(xml), media_type="application/xml")
 
 # -------------------------
 # Routes
@@ -400,23 +390,13 @@ def home(request: Request):
 
 @app.get("/gdpr", response_class=HTMLResponse)
 def gdpr(request: Request):
-    ctx = page_ctx(
-        request,
-        "/gdpr",
-        "GDPR – HP Juridik",
-        "Information om personuppgifter och integritet.",
-    )
+    ctx = page_ctx(request, "/gdpr", "GDPR – HP Juridik", "Information om personuppgifter och integritet.")
     return templates.TemplateResponse("pages/gdpr.html", ctx)
 
 
 @app.get("/allmanna-villkor", response_class=HTMLResponse)
 def terms(request: Request):
-    ctx = page_ctx(
-        request,
-        "/allmanna-villkor",
-        "Allmänna villkor – HP Juridik",
-        "Villkor för tjänster och rådgivning.",
-    )
+    ctx = page_ctx(request, "/allmanna-villkor", "Allmänna villkor – HP Juridik", "Villkor för tjänster och rådgivning.")
     return templates.TemplateResponse("pages/terms.html", ctx)
 
 
@@ -429,7 +409,7 @@ def contact_submit(
     telefon: str = Form(""),
     website: str = Form("", required=False),  # honeypot spam-skydd
 ):
-    # Spam -> låtsas OK utan att skicka
+    # Honeypot => låtsas OK utan att skicka
     if website:
         ctx = page_ctx(
             request,
@@ -446,7 +426,6 @@ def contact_submit(
     except Exception as e:
         error = str(e)
 
-    # Returnera startsidan (one-page) med status-rutor i kontaktsektionen
     ctx = page_ctx(
         request,
         "/",
@@ -457,7 +436,6 @@ def contact_submit(
     return templates.TemplateResponse("pages/home.html", ctx)
 
 
-# --- NYTT: Låna bil till skuldsatt ---
 @app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
 def lana_bil_form(request: Request):
     ctx = page_ctx(
@@ -490,7 +468,6 @@ def lana_bil_submit(
     andamal: str = Form(...),
     disclaimer_accept: str = Form(None),
 ):
-    # Måste godkänna friskrivningsvillkor innan PDF skapas
     if not disclaimer_accept:
         ctx = page_ctx(
             request,
@@ -501,16 +478,8 @@ def lana_bil_submit(
         ctx.update({"sent": False, "error": "Du måste godkänna friskrivningsvillkoret för att fortsätta."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
-    # (Valfritt men bra) logga godkännandet i serverlogg
-    client_ip = request.client.host if request.client else "unknown"
-    accepted_at = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
-    ua = request.headers.get("user-agent", "unknown")
-    print(f"[lana-bil] disclaimer accepted at={accepted_at} ip={client_ip} ua={ua}")
-
-    # Normalisera regnr: uppercase + inga mellanslag
     bil_regnr_norm = "".join((bil_regnr or "").split()).upper()
 
-    # datetime-local -> YYYY-MM-DDTHH:MM
     try:
         from_dt_obj = datetime.fromisoformat(from_dt)
         to_dt_obj = datetime.fromisoformat(to_dt)
