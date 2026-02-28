@@ -286,6 +286,14 @@ def build_loan_pdf(
         )
     )
 
+    # Friskrivning (bevisunderlag, ingen garanti för visst utfall)
+    story.append(
+        P(
+            "Detta avtal är ett standardiserat bevisunderlag baserat på parternas uppgifter och innebär ingen garanti för visst utfall vid myndighetsprövning eller tvist.",
+            small,
+        )
+    )
+
     # 7) Villkor 1–6
     story.append(Paragraph("Villkor", h))
     villkor = [
@@ -441,7 +449,25 @@ def lana_bil_submit(
     from_dt: str = Form(...),
     to_dt: str = Form(...),
     andamal: str = Form(...),
+    disclaimer_accept: str = Form(None),
 ):
+    # Måste godkänna friskrivningsvillkor innan PDF skapas
+    if not disclaimer_accept:
+        ctx = page_ctx(
+            request,
+            "/lana-bil-till-skuldsatt",
+            "Låna bil till skuldsatt | HP Juridik",
+            "Skapa ett tillfälligt låneavtal för bil som PDF.",
+        )
+        ctx.update({"sent": False, "error": "Du måste godkänna friskrivningsvillkoret för att fortsätta."})
+        return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
+
+    # (Valfritt men bra) logga godkännandet i serverlogg
+    client_ip = request.client.host if request.client else "unknown"
+    accepted_at = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    ua = request.headers.get("user-agent", "unknown")
+    print(f"[lana-bil] disclaimer accepted at={accepted_at} ip={client_ip} ua={ua}")
+
     # Normalisera regnr: uppercase + inga mellanslag
     bil_regnr_norm = "".join((bil_regnr or "").split()).upper()
 
