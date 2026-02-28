@@ -1,48 +1,62 @@
+<!DOCTYPE html>
+<html lang="sv">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!DOCTYPE html>
-    <html lang="sv">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>{{ seo.title if seo else "HP Juridik" }}</title>
+    {% if seo and seo.description %}
+      <meta name="description" content="{{ seo.description }}" />
+    {% endif %}
+    {% if seo and seo.canonical %}
+      <link rel="canonical" href="{{ seo.canonical }}" />
+    {% endif %}
+    {% if seo and seo.robots %}
+      <meta name="robots" content="{{ seo.robots }}" />
+    {% endif %}
 
-      <title>{{ seo.title if seo else "HP Juridik" }}</title>
-      {% if seo and seo.description %}
-        <meta name="description" content="{{ seo.description }}" />
-      {% endif %}
-      {% if seo and seo.canonical %}
-        <link rel="canonical" href="{{ seo.canonical }}" />
-      {% endif %}
-      {% if seo and seo.robots %}
-        <meta name="robots" content="{{ seo.robots }}" />
-      {% endif %}
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
 
-      <link rel="stylesheet" href="/static/style.css" />
-    </head>
-<!-- Cookie banner -->
-<div id="cookieBanner" class="cookie-banner" role="dialog" aria-live="polite" aria-label="Cookie-meddelande">
-  <div class="cookie-inner">
-    <div class="cookie-text">
-      <strong>Cookies</strong>
-      <p class="muted">
-        Vi använder nödvändiga cookies för att webbplatsen ska fungera.
-        Med ditt samtycke kan vi även använda cookies för statistik.
-        Läs mer i vår <a href="/gdpr">integritetspolicy</a>.
-      </p>
+  <body>
+    <!-- Cookie banner -->
+    <div id="cookieBanner" class="cookie-banner" role="dialog" aria-live="polite" aria-label="Cookie-meddelande">
+      <div class="cookie-inner">
+        <div class="cookie-text">
+          <strong>Cookies</strong>
+          <p class="muted">
+            Vi använder nödvändiga cookies för att webbplatsen ska fungera.
+            Med ditt samtycke kan vi även använda cookies för statistik.
+            Läs mer i vår <a href="/gdpr">integritetspolicy</a>.
+          </p>
+        </div>
+
+        <div class="cookie-actions">
+          <button type="button" class="btn-secondary" id="cookieDecline">Avböj</button>
+          <button type="button" class="btn-primary" id="cookieAccept">Acceptera</button>
+        </div>
+      </div>
     </div>
 
-    <div class="cookie-actions">
-      <button type="button" class="btn-secondary" id="cookieDecline">Avböj</button>
-      <button type="button" class="btn-primary" id="cookieAccept">Acceptera</button>
-    </div>
-  </div>
-</div>
-    <body>
-      {% include "partials/header.html" %}
+    <!-- LOGGA HÖGST UPP -->
+    <header class="site-header">
+      <div class="container logo-container">
+        <a href="{{ url_for('home') }}" aria-label="Gå till startsidan">
+          <img
+            src="{{ url_for('static', filename='hp-juridik-logo.png') }}"
+            alt="HP Juridik logotyp"
+            class="site-logo"
+          />
+        </a>
+      </div>
+    </header>
 
-      <main>
-        {% block content %}{% endblock %}
-      </main>
+    {% include "partials/header.html" %}
 
-      {% include "partials/footer.html" %}
-    </body>
-    </html>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+
+    {% include "partials/footer.html" %}
+  </body>
+</html>
