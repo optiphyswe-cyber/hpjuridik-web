@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Granska uppgifter</h1>
+
+<div class="card">
+  <p><b>Utlånare:</b> {{ payload.utlanare.namn }}</p>
+  <p><b>Låntagare:</b> {{ payload.lantagare.namn }}</p>
+  <p><b>Fordon:</b> {{ payload.fordon.marke_modell }} ({{ payload.fordon.regnr }})</p>
+  <p><b>Period:</b> {{ payload.period.from_dt }} → {{ payload.period.to_dt }}</p>
+  <p><b>Ändamål:</b> {{ payload.andamal }}</p>
+</div>
+
+<form method="post" action="/lana-bil-till-skuldsatt/free">
+  {% for key, value in payload.items() %}
+    <input type="hidden" name="{{ key }}" value="{{ value }}">
+  {% endfor %}
+  <label>
+    <input type="checkbox" name="confirm_correct" required>
+    Jag har kontrollerat att uppgifterna är korrekta
+  </label>
+  <button type="submit">Gratis – Ladda ner PDF</button>
+</form>
+
+<form method="post" action="/lana-bil-till-skuldsatt/paid">
+  {% for key, value in payload.items() %}
+    <input type="hidden" name="{{ key }}" value="{{ value }}">
+  {% endfor %}
+  <label>
+    <input type="checkbox" name="confirm_correct" required>
+    Jag har kontrollerat att uppgifterna är korrekta
+  </label>
+  <button type="submit">Premium – Betala 150 kr</button>
+</form>
+
+{% endblock %}
