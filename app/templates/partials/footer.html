@@ -1,38 +1,156 @@
- <footer class="footer">
-      <div class="container">
+<footer class="footer">
+  <div class="container">
 
-        <div class="footer-grid">
-          <div class="footer-col">
-            <h3>HP Juridik</h3>
-            <p>
-              Subsidiaritet i Lund AB<br>
-              Org.nr 559365-2018<br>
-              Karl XI gata 21<br>
-              222 20 Lund
-            </p>
-          </div>
-
-          <div class="footer-col">
-            <h3>Kontakt</h3>
-            <p>
-              <a href="tel:0763171284">📞 076-317 12 84</a><br>
-              <a href="mailto:hp@hpjuridik.se">✉ hp@hpjuridik.se</a><br>
-              <a href="https://hpjuridik.se" target="_blank" rel="noopener">🌐 hpjuridik.se</a>
-            </p>
-          </div>
-
-          <div class="footer-col">
-            <h3>Juridiskt</h3>
-            <p>
-              <a href="/gdpr">GDPR</a><br>
-              <a href="/allmanna-villkor">Allmänna villkor</a>
-            </p>
-          </div>
-        </div>
-
-        <div class="footer-bottom">
-          © 2026 HP Juridik – Alla rättigheter förbehållna
-        </div>
-
+    <div class="footer-grid">
+      <div class="footer-col">
+        <h3>HP Juridik</h3>
+        <p>
+          Subsidiaritet i Lund AB<br>
+          Org.nr 559365-2018<br>
+          Karl XI gata 21<br>
+          222 20 Lund
+        </p>
       </div>
-    </footer>
+
+      <div class="footer-col">
+        <h3>Kontakt</h3>
+        <p>
+          <a href="tel:0763171284">📞 076-317 12 84</a><br>
+          <a href="mailto:hp@hpjuridik.se">✉ hp@hpjuridik.se</a><br>
+          <a href="https://hpjuridik.se" target="_blank" rel="noopener">🌐 hpjuridik.se</a>
+        </p>
+      </div>
+
+      <div class="footer-col">
+        <h3>Juridiskt</h3>
+        <p>
+          <a href="/gdpr">GDPR</a><br>
+          <a href="/allmanna-villkor">Allmänna villkor</a>
+        </p>
+      </div>
+    </div>
+
+    <div class="footer-bottom">
+      © 2026 HP Juridik – Alla rättigheter förbehållna
+    </div>
+
+  </div>
+</footer>
+
+
+<!-- ============================= -->
+<!-- Desktop Sticky Ring Widget  -->
+<!-- ============================= -->
+
+<a class="call-widget-desktop" href="tel:0763171284">
+  <img src="/static/head-phonecall.png" alt="Ring HP Juridik" class="call-avatar">
+  <div class="call-text">
+    <div class="call-title">Prata direkt med jurist</div>
+    <div class="call-sub">Ring nu – 20 min kostnadsfri bedömning</div>
+  </div>
+  <div class="call-button">
+    Ring nu
+  </div>
+</a>
+
+
+<style>
+/* ============================= */
+/* Desktop Sticky Call Widget   */
+/* ============================= */
+
+.call-widget-desktop {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9999;
+
+  display: none;
+  align-items: center;
+  gap: 14px;
+
+  width: 420px;
+  max-width: calc(100vw - 40px);
+
+  padding: 14px 16px;
+  border-radius: 20px;
+
+  background: #0f1b2d;
+  color: #fff;
+  text-decoration: none;
+
+  box-shadow: 0 18px 50px rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.08);
+
+  transition: transform .15s ease, opacity .2s ease;
+}
+
+.call-widget-desktop:hover {
+  transform: translateY(-2px);
+}
+
+.call-avatar {
+  width: 50px;
+  height: 50px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 2px solid rgba(255,255,255,0.15);
+  flex-shrink: 0;
+}
+
+.call-text {
+  flex: 1;
+}
+
+.call-title {
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.call-sub {
+  font-size: 13px;
+  opacity: 0.85;
+  margin-top: 4px;
+}
+
+.call-button {
+  background: #2f8f5b;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* Visa endast på desktop */
+@media (min-width: 980px) {
+  .call-widget-desktop {
+    display: flex;
+  }
+}
+</style>
+
+
+<script>
+/* Visa först efter lite scroll */
+document.addEventListener("DOMContentLoaded", function() {
+  const widget = document.querySelector(".call-widget-desktop");
+  if (!widget) return;
+
+  widget.style.opacity = "0";
+  widget.style.pointerEvents = "none";
+
+  const showAfter = 200;
+
+  window.addEventListener("scroll", function() {
+    if (window.scrollY > showAfter) {
+      widget.style.opacity = "1";
+      widget.style.pointerEvents = "auto";
+    } else {
+      widget.style.opacity = "0";
+      widget.style.pointerEvents = "none";
+    }
+  });
+});
+</script>
