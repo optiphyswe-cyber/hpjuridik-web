@@ -9,53 +9,71 @@
       <div class="hero-copy">
         <div class="pill-row">
           <span class="pill">20 min gratis första bedömning</span>
-          <span class="pill pill-accent">Återkoppling inom 24 timmar</span>
+          <span class="pill pill-accent">Snabbt svar • Samma dag</span>
         </div>
 
-        <h1>Juridisk rådgivning som känns trygg – och blir tydlig.</h1>
+        <h1>Jurist i södra Sverige – ring nu och få en tydlig plan.</h1>
+
         <p class="hero-lead">
-          Personlig, värdeskapande juridik för privatpersoner och företag. Vi hjälper dig att
-          förstå läget, välja rätt väg och agera i tid.
+          När något brinner, skaver eller låser sig ska du inte bära det själv.
+          Vi tar kontroll: sorterar läget, väljer strategi och driver ärendet framåt – hårt men professionellt.
         </p>
 
         <div class="hero-points">
           <div class="point">
-            <div class="point-ic">✓</div>
+            <div class="point-ic">⚡</div>
             <div>
-              <strong>Ansvarsförsäkring</strong>
-              <div class="muted">Via Folksam sedan 2020</div>
+              <strong>Snabb juridisk bedömning</strong>
+              <div class="muted">Du får klarhet och nästa steg – ofta samma dag</div>
+            </div>
+          </div>
+
+          <div class="point">
+            <div class="point-ic">🛡️</div>
+            <div>
+              <strong>Vi tar striden åt dig</strong>
+              <div class="muted">Tydlig linje • press i förhandling • stark processföring</div>
+            </div>
+          </div>
+
+          <div class="point">
+            <div class="point-ic">⚖️</div>
+            <div>
+              <strong>Privatpersoner & företag</strong>
+              <div class="muted">Familj • Avtal • Arbete • Tvist & process • Fordran</div>
             </div>
           </div>
 
           <div class="point">
             <div class="point-ic">✓</div>
             <div>
-              <strong>Rättsskydd & rättshjälp</strong>
-              <div class="muted">Vi hjälper dig navigera processen</div>
-            </div>
-          </div>
-
-          <div class="point">
-            <div class="point-ic">✓</div>
-            <div>
-              <strong>Avtal • Familj • Arbete • Fordran</strong>
-              <div class="muted">Praktisk rådgivning, tydliga nästa steg</div>
+              <strong>Ansvarsförsäkring & finansiering</strong>
+              <div class="muted">Via Folksam sedan 2020 • rättsskydd & rättshjälp</div>
             </div>
           </div>
         </div>
 
         <div class="hero-mini">
           <div class="mini-card">
-            <div class="mini-top">📍 Lund</div>
-            <div class="muted">Karl XI gata 21</div>
+            <div class="mini-top">📍 Södra Sverige</div>
+            <div class="muted">Lund • Skåne • och hela regionen</div>
           </div>
           <div class="mini-card">
-            <div class="mini-top">☎ 076-317 12 84</div>
-            <div class="muted">Mån–Fre 08–18</div>
+            <div class="mini-top">☎ Ring nu</div>
+            <div class="muted"><a href="tel:0763171284">076-317 12 84</a></div>
           </div>
           <div class="mini-card">
-            <div class="mini-top">✉ hp@hpjuridik.se</div>
-            <div class="muted">Svar normalt inom 24h</div>
+            <div class="mini-top">⏱ Snabb hantering</div>
+            <div class="muted">Akut? Säg till direkt i samtalet</div>
+          </div>
+        </div>
+
+        <div class="hero-cta" style="margin-top:16px;">
+          <a class="btn-primary" href="tel:0763171284" style="display:inline-flex; align-items:center; gap:10px; padding:14px 18px;">
+            📞 Ring nu – få en tydlig plan
+          </a>
+          <div class="muted" style="margin-top:10px;">
+            Föredrar du att skriva? Skicka formuläret så får du en tydlig återkoppling med nästa steg.
           </div>
         </div>
       </div>
@@ -64,13 +82,16 @@
       <aside class="hero-form">
         <div class="form-card">
           <div class="form-head">
-            <h2>Kontakta oss</h2>
-            <p class="muted">Beskriv kort vad det gäller så återkommer vi normalt inom 24 timmar.</p>
+            <h2>Skicka din fråga – få oro till klarhet</h2>
+            <p class="muted">
+              Beskriv kort vad som händer. Vi återkommer snabbt med en tydlig plan.
+              Snabbast hjälp får du via <a href="tel:0763171284"><strong>telefon</strong></a>.
+            </p>
           </div>
 
           {% if sent %}
             <div class="success-box">
-              <strong>Tack!</strong> Vi återkommer så snart som möjligt.
+              <strong>Tack!</strong> Vi har tagit emot din förfrågan och återkommer med nästa steg så snart vi kan.
             </div>
           {% endif %}
 
@@ -92,7 +113,7 @@
               </div>
 
               <div class="form-group">
-                <label for="telefon">Telefon (valfritt)</label>
+                <label for="telefon">Telefon (för snabbast hjälp)</label>
                 <input type="text" id="telefon" name="telefon" placeholder="076-..." />
               </div>
             </div>
@@ -103,17 +124,19 @@
             </div>
 
             <div class="form-group">
-              <label for="meddelande">Meddelande</label>
-              <textarea id="meddelande" name="meddelande" rows="6" placeholder="Vad behöver du hjälp med?" required></textarea>
-              <div class="form-hint muted">Skriv gärna: vad som hänt, tidslinje och vad du vill uppnå.</div>
+              <label for="meddelande">Vad gäller det?</label>
+              <textarea id="meddelande" name="meddelande" rows="6" placeholder="Beskriv kort: vad har hänt, vad vill du uppnå och när behöver du svar?" required></textarea>
+              <div class="form-hint muted">
+                Tips: skriv 3 rader – (1) vad som hänt, (2) vad du vill uppnå, (3) deadline/om det är akut.
+              </div>
             </div>
 
             <button type="submit" class="btn-primary btn-wide">
-              Skicka förfrågan
+              Skicka – få en tydlig plan
             </button>
 
             <div class="form-foot muted">
-              Genom att skicka godkänner du att vi kontaktar dig angående din förfrågan.
+              Du får en tydlig återkoppling med nästa steg. Inget krav på att gå vidare.
               Se även <a href="/gdpr">GDPR</a>.
             </div>
           </form>
@@ -123,6 +146,44 @@
 
   </div>
 </section>
+
+
+<!-- Snabb process / Hur det går till -->
+<section id="hur-det-gar-till" class="section">
+  <div class="container">
+    <h2>Så löser vi det</h2>
+    <p class="muted" style="max-width: 70ch;">
+      Du ska känna att något händer direkt. Vi jobbar strukturerat och offensivt – med kontroll på risk, kostnad och tidslinje.
+    </p>
+
+    <div class="services-grid-new">
+      <div class="service-card">
+        <div class="service-icon">①</div>
+        <div>
+          <h3>Snabb bedömning</h3>
+          <p>Vi sorterar fakta, risk och målbild. Du får tydliga nästa steg.</p>
+        </div>
+      </div>
+
+      <div class="service-card">
+        <div class="service-icon">②</div>
+        <div>
+          <h3>Strategi & press</h3>
+          <p>Vi sätter linjen och driver: förhandling, krav, svaromål – rätt sak i rätt tid.</p>
+        </div>
+      </div>
+
+      <div class="service-card">
+        <div class="service-icon">③</div>
+        <div>
+          <h3>Resultat</h3>
+          <p>Målet är lösning med bästa möjliga position – förlikning eller process.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 
 <section id="om-oss" class="section profile-section">
   <div class="container">
@@ -137,28 +198,38 @@
         <div class="profile-title">VD, ägare SIL AB, Fil.kand</div>
 
         <p>
-          Sedan 2021 har jag företrätt klienter i tvistemål vid flera av landets
-          tingsrätter, i mål med värden upp till 10 miljoner kronor.
-          Under 2025 hanterade jag sammanlagt över 17 miljoner kronor
-          i tvistade förmögenhetsvärden.
+          Jag företräder klienter i tvistemål och civilrättsliga frågor i hela södra Sverige.
+          Målet är alltid samma: tydlig strategi, hög aktivitet och en position som håller – i förhandling och domstol.
         </p>
 
         <p>
-          Jag arbetar med familjerätt, arbetsrätt, avtalsrätt, skadestånd,
-          köprätt och konkursärenden. Jag företräder både kärande och
-          svarande och har bred erfarenhet av förlikningsförhandlingar
-          såväl som process i domstol.
+          Sedan 2021 har jag företrätt klienter i mål med värden upp till 10 miljoner kronor.
+          Under 2025 hanterade jag över 17 miljoner kronor i tvistade förmögenhetsvärden.
         </p>
 
-        <p>
-          För mig handlar juridik om mer än lagtext – det handlar om strategi,
-          tydlighet och att skapa trygghet i en ofta svår situation.
-        </p>
-
-        <p>
-          Hos HP Juridik får du personligt engagemang och kvalificerad juridisk
-          rådgivning med verklig processerfarenhet.
-        </p>
+        <div class="hero-points" style="margin-top:16px;">
+          <div class="point">
+            <div class="point-ic">⚖️</div>
+            <div>
+              <strong>Processvana</strong>
+              <div class="muted">Tingsrätt • förlikning • bevisning • strategi</div>
+            </div>
+          </div>
+          <div class="point">
+            <div class="point-ic">🧭</div>
+            <div>
+              <strong>Tydlighet</strong>
+              <div class="muted">Du vet exakt vad som händer och varför</div>
+            </div>
+          </div>
+          <div class="point">
+            <div class="point-ic">🔥</div>
+            <div>
+              <strong>Driv</strong>
+              <div class="muted">Vi ligger på – för din skull och ditt resultat</div>
+            </div>
+          </div>
+        </div>
 
         <div class="profile-contact">
           <a href="tel:+46763171284">+46 76 317 12 84</a>
@@ -170,13 +241,16 @@
   </div>
 </section>
 
+
 <section id="tjanster" class="section">
   <div class="container">
     <h2>Tjänster</h2>
+    <p class="muted" style="max-width: 70ch;">
+      Välj området som matchar din situation. Oavsett vilket: vi jobbar snabbt, strukturerat och offensivt – med fokus på utfall.
+    </p>
 
     <div class="services-grid-new">
 
-      <!-- Avtalsrätt -->
       <div class="service-card">
         <div class="service-icon">
           <svg viewBox="0 0 24 24" fill="none">
@@ -186,11 +260,10 @@
         </div>
         <div>
           <h3>Avtalsrätt</h3>
-          <p>Upprättande, granskning, förhandling och tvist.</p>
+          <p>Granskning, förhandling och tvist. Vi tar kontroll över risk och motpartsdialog.</p>
         </div>
       </div>
 
-      <!-- Familjerätt -->
       <div class="service-card">
         <div class="service-icon">
           <svg viewBox="0 0 24 24" fill="none">
@@ -202,11 +275,10 @@
         </div>
         <div>
           <h3>Familjerätt</h3>
-          <p>Vårdnad, boende, umgänge, bodelning och boutredning.</p>
+          <p>Vårdnad, boende, umgänge, bodelning. Vi agerar snabbt och skyddar din position.</p>
         </div>
       </div>
 
-      <!-- Arbetsrätt -->
       <div class="service-card">
         <div class="service-icon">
           <svg viewBox="0 0 24 24" fill="none">
@@ -216,11 +288,10 @@
         </div>
         <div>
           <h3>Arbetsrätt</h3>
-          <p>Rådgivning för arbetsgivare och arbetstagare.</p>
+          <p>Uppsägning, tvist, krav. Tydlig argumentation och snabb hantering av deadlines.</p>
         </div>
       </div>
 
-      <!-- Tvist & process -->
       <div class="service-card">
         <div class="service-icon">
           <svg viewBox="0 0 24 24" fill="none">
@@ -230,11 +301,10 @@
         </div>
         <div>
           <h3>Tvist & process</h3>
-          <p>Strategi, förlikning och process i domstol.</p>
+          <p>Strategi, förlikning och domstol. Vi driver på och håller ihop helheten.</p>
         </div>
       </div>
 
-      <!-- Fordringsrätt -->
       <div class="service-card">
         <div class="service-icon">
           <svg viewBox="0 0 24 24" fill="none">
@@ -244,11 +314,10 @@
         </div>
         <div>
           <h3>Fordringsrätt</h3>
-          <p>Krav, betalningstvister, förlikning och process.</p>
+          <p>Krav, betalningstvister och process. Vi sätter press och driver fram uppgörelse.</p>
         </div>
       </div>
 
-      <!-- Konkurs -->
       <div class="service-card">
         <div class="service-icon">
           <svg viewBox="0 0 24 24" fill="none">
@@ -257,7 +326,7 @@
         </div>
         <div>
           <h3>Konkurs & obestånd</h3>
-          <p>Rådgivning i obeståndsrelaterade frågor.</p>
+          <p>Snabb rådgivning i obeståndsfrågor. Prioritering, riskkontroll och nästa steg.</p>
         </div>
       </div>
 
@@ -265,19 +334,18 @@
   </div>
 </section>
 
+
 <section id="cases" class="section">
   <div class="container">
     <div class="cases-head">
       <h2>Cases</h2>
-      <p class="muted">Ett urval av anonymiserade uppdrag (mest relevanta).</p>
+      <p class="muted">Urval av anonymiserade uppdrag – så här driver vi ärenden i praktiken.</p>
     </div>
 
     <div class="cases-grid">
 
-      <!-- Case 1 -->
       <article class="case-card">
         <div class="case-illustration" aria-hidden="true">
-          <!-- Family / underhåll -->
           <svg viewBox="0 0 64 64" fill="none">
             <path d="M10 54V30L32 14l22 16v24" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
             <path d="M26 54V38h12v16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -289,19 +357,19 @@
             <span class="case-tag">Familjerätt</span>
             <span class="case-year">2026</span>
           </div>
-          <h3 class="case-title">Underhållsmål – förlikning vid Lunds tingsrätt</h3>
-          <p class="case-lead">Företrädde svarande i underhållsmål rörande ekonomiskt anspråk.</p>
+          <h3 class="case-title">Underhållsmål – vi pressade fram förlikning vid Lunds tingsrätt</h3>
+          <p class="case-lead">
+            Vi tog kontroll över underlag, tidslinje och förhandling – och låste en lösning innan ärendet drog ut på tiden.
+          </p>
           <ul class="case-bullets">
             <li><strong>Utfall:</strong> Förlikning</li>
-            <li><strong>Fokus:</strong> Strategi & förhandling</li>
+            <li><strong>Vår linje:</strong> Tydlig strategi & press i förhandling</li>
           </ul>
         </div>
       </article>
 
-      <!-- Case 2 -->
       <article class="case-card">
         <div class="case-illustration" aria-hidden="true">
-          <!-- Damages / skadestånd -->
           <svg viewBox="0 0 64 64" fill="none">
             <path d="M20 26h24" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
             <path d="M26 46h12" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -315,19 +383,19 @@
             <span class="case-tag">Skadestånd</span>
             <span class="case-year">2025</span>
           </div>
-          <h3 class="case-title">Skadeståndstvist – reducering av krav</h3>
-          <p class="case-lead">Företrädde svarande i skadeståndstvist med omfattande bevisfrågor.</p>
+          <h3 class="case-title">Skadeståndstvist – vi kapade kravet och tog kontroll över bevisningen</h3>
+          <p class="case-lead">
+            Med strukturerad bevisning och tydlig processlinje pressade vi ner risk och kravbild till ett för klienten förmånligt läge.
+          </p>
           <ul class="case-bullets">
-            <li><strong>Utfall:</strong> Förmånligt utfall</li>
-            <li><strong>Fokus:</strong> Bevisning & process</li>
+            <li><strong>Utfall:</strong> Förmånligt resultat</li>
+            <li><strong>Vår linje:</strong> Bevisning • process • offensiv argumentation</li>
           </ul>
         </div>
       </article>
 
-      <!-- Case 3 -->
       <article class="case-card">
         <div class="case-illustration" aria-hidden="true">
-          <!-- Inheritance / arvsrätt -->
           <svg viewBox="0 0 64 64" fill="none">
             <path d="M18 28h28v26H18V28z" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
             <path d="M22 28v-6a10 10 0 0 1 20 0v6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -340,19 +408,19 @@
             <span class="case-tag">Arvsrätt</span>
             <span class="case-year">2025</span>
           </div>
-          <h3 class="case-title">Laglottskrav – omfattande arvsrättsligt ärende</h3>
-          <p class="case-lead">Ärende med höga krav på juridisk analys och processstrategi.</p>
+          <h3 class="case-title">Laglottskrav – vi byggde en hållbar processstrategi från dag 1</h3>
+          <p class="case-lead">
+            Vi strukturerade bevis, angreppspunkter och risk – och drev ärendet med full kontroll på nästa steg.
+          </p>
           <ul class="case-bullets">
-            <li><strong>Fokus:</strong> Analys & bevisvärdering</li>
+            <li><strong>Vår linje:</strong> Analys • bevisvärdering • strategi</li>
             <li><strong>Inriktning:</strong> Civilprocess</li>
           </ul>
         </div>
       </article>
 
-      <!-- Case 4 -->
       <article class="case-card">
         <div class="case-illustration" aria-hidden="true">
-          <!-- Employment / arbetsrätt -->
           <svg viewBox="0 0 64 64" fill="none">
             <path d="M16 24h32a4 4 0 0 1 4 4v18a4 4 0 0 1-4 4H16a4 4 0 0 1-4-4V28a4 4 0 0 1 4-4z" stroke="currentColor" stroke-width="2.2"/>
             <path d="M24 24v-4a4 4 0 0 1 4-4h8a4 4 0 0 1 4 4v4" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -364,19 +432,19 @@
             <span class="case-tag">Arbetsrätt</span>
             <span class="case-year">2024</span>
           </div>
-          <h3 class="case-title">Arbetsrättslig tvist – talan medgavs</h3>
-          <p class="case-lead">Företrädde kärande i arbetsrättsligt mål rörande ekonomiskt anspråk.</p>
+          <h3 class="case-title">Arbetsrättslig tvist – vi satte tryck och motparten medgav talan</h3>
+          <p class="case-lead">
+            Med tydlig argumentation och rätt åtgärd i rätt tid tog vi kommandot – och motparten gav med sig.
+          </p>
           <ul class="case-bullets">
             <li><strong>Utfall:</strong> Motpart medgav talan</li>
-            <li><strong>Fokus:</strong> Argumentation & struktur</li>
+            <li><strong>Vår linje:</strong> Strukturerad bevisning • snabb aktivitet</li>
           </ul>
         </div>
       </article>
 
-      <!-- Case 5 -->
       <article class="case-card">
         <div class="case-illustration" aria-hidden="true">
-          <!-- Contracts / avtalsrätt -->
           <svg viewBox="0 0 64 64" fill="none">
             <path d="M20 14h18l6 6v30H20V14z" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
             <path d="M38 14v8h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -388,19 +456,19 @@
             <span class="case-tag">Avtalsrätt</span>
             <span class="case-year">2024</span>
           </div>
-          <h3 class="case-title">Avtalstvist – förhandling och lösning</h3>
-          <p class="case-lead">Rådgivning och förhandling i kommersiell tvist med fokus på riskminimering.</p>
+          <h3 class="case-title">Avtalstvist – vi förhandlade fram lösning och minimerade risk</h3>
+          <p class="case-lead">
+            Vi tog över dialogen, skärpte kravbilden och drev fram en effektiv lösning utan onödiga omvägar.
+          </p>
           <ul class="case-bullets">
-            <li><strong>Fokus:</strong> Förhandling</li>
+            <li><strong>Fokus:</strong> Förhandling • riskkontroll</li>
             <li><strong>Resultat:</strong> Effektiv lösning</li>
           </ul>
         </div>
       </article>
 
-      <!-- Case 6 -->
       <article class="case-card">
         <div class="case-illustration" aria-hidden="true">
-          <!-- Claims / fordringsrätt -->
           <svg viewBox="0 0 64 64" fill="none">
             <path d="M18 22h28a6 6 0 0 1 6 6v14a6 6 0 0 1-6 6H18a6 6 0 0 1-6-6V28a6 6 0 0 1 6-6z" stroke="currentColor" stroke-width="2.2"/>
             <path d="M18 30h34" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
@@ -412,10 +480,12 @@
             <span class="case-tag">Fordringsrätt</span>
             <span class="case-year">2023</span>
           </div>
-          <h3 class="case-title">Fordran – kravhantering och uppgörelse</h3>
-          <p class="case-lead">Hantering av krav, underlag och motpartsdialog för att nå uppgörelse.</p>
+          <h3 class="case-title">Fordran – vi satte press och drev fram uppgörelse</h3>
+          <p class="case-lead">
+            Med rätt dokumentation och tydlig kravstrategi flyttade vi ärendet från “stopp” till “lösning”.
+          </p>
           <ul class="case-bullets">
-            <li><strong>Fokus:</strong> Dokumentation</li>
+            <li><strong>Fokus:</strong> Dokumentation • krav • motpartsdialog</li>
             <li><strong>Resultat:</strong> Uppgörelse</li>
           </ul>
         </div>
@@ -424,4 +494,5 @@
     </div>
   </div>
 </section>
+
 {% endblock %}
