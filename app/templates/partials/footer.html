@@ -39,19 +39,20 @@
 
 
 <!-- ============================= -->
-<!-- Desktop Sticky Ring Widget  -->
+<!-- Desktop Sticky Ring Widget    -->
 <!-- ============================= -->
-
-<a class="call-widget-desktop" href="tel:0763171284">
+<a class="call-widget-desktop" href="tel:0763171284" aria-label="Ring HP Juridik">
   <img src="/static/head-phonecall.png" alt="Ring HP Juridik" class="call-avatar">
   <div class="call-text">
     <div class="call-title">Prata direkt med jurist</div>
     <div class="call-sub">Ring nu – 20 min kostnadsfri bedömning</div>
   </div>
-  <div class="call-button">
-    Ring nu
-  </div>
+  <div class="call-button">Ring nu</div>
 </a>
+
+<!-- ============================= -->
+<!-- Mobile Sticky Ring Bar        -->
+<!-- ============================= -->
 <a class="call-bar-mobile" href="tel:0763171284" aria-label="Ring HP Juridik">
   <img class="call-bar-mobile__avatar" src="/static/head-phonecall.png" alt="Ring">
   <div class="call-bar-mobile__text">
@@ -61,17 +62,82 @@
   <div class="call-bar-mobile__cta">📞</div>
 </a>
 
+
 <style>
 /* ============================= */
-/* DESKTOP widget (höger nere)   */
+/* DESKTOP WIDGET (HÖGER NERE)   */
 /* ============================= */
-.call-widget-desktop { display: none; } /* default av */
-@media (min-width: 980px) {
-  .call-widget-desktop { display: flex; }
+.call-widget-desktop{
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 9999;
+
+  display: none;
+  align-items: center;
+  gap: 14px;
+
+  width: 420px;
+  max-width: calc(100vw - 40px);
+
+  padding: 14px 16px;
+  border-radius: 20px;
+
+  background: #0f1b2d;
+  color: #fff;
+  text-decoration: none;
+
+  box-shadow: 0 18px 50px rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.08);
+
+  transition: transform .15s ease, opacity .18s ease;
+}
+
+.call-widget-desktop:hover{
+  transform: translateY(-2px);
+}
+
+.call-avatar{
+  width: 50px;
+  height: 50px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 2px solid rgba(255,255,255,0.15);
+  flex-shrink: 0;
+}
+
+.call-text{
+  flex: 1;
+}
+
+.call-title{
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1.1;
+}
+
+.call-sub{
+  font-size: 13px;
+  opacity: 0.85;
+  margin-top: 4px;
+}
+
+.call-button{
+  background: #2f8f5b;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+/* Visa desktop-widget endast på desktop */
+@media (min-width: 980px){
+  .call-widget-desktop{ display: flex; }
 }
 
 /* ============================= */
-/* MOBIL sticky bar (botten)     */
+/* MOBIL STICKY BAR (BOTTON)     */
 /* ============================= */
 .call-bar-mobile{
   position: fixed;
@@ -80,7 +146,7 @@
   bottom: 12px;
   z-index: 9999;
 
-  display: none; /* visas via media query */
+  display: none;
   align-items: center;
   gap: 10px;
 
@@ -94,8 +160,9 @@
   border: 1px solid rgba(255,255,255,.10);
   box-shadow: 0 16px 42px rgba(0,0,0,.18);
 
-  /* iPhone safe area */
   padding-bottom: calc(12px + env(safe-area-inset-bottom));
+
+  transition: opacity .18s ease, transform .18s ease;
 }
 
 .call-bar-mobile__avatar{
@@ -137,7 +204,51 @@
   flex: 0 0 auto;
 }
 
-/* Visa bara på mobil */
+/* Visa mobilbar endast på mobil */
 @media (max-width: 979px){
   .call-bar-mobile{ display: flex; }
+  body{ padding-bottom: 92px; } /* så inget hamnar bakom baren */
 }
+</style>
+
+
+<script>
+(() => {
+  const mobileBar = document.querySelector('.call-bar-mobile');
+  const desktopWidget = document.querySelector('.call-widget-desktop');
+
+  // starta gömda (båda)
+  [mobileBar, desktopWidget].forEach(el => {
+    if (!el) return;
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+    el.style.transform = 'translateY(6px)';
+  });
+
+  let shown = false;
+
+  const show = () => {
+    if (shown) return;
+    shown = true;
+
+    [mobileBar, desktopWidget].forEach(el => {
+      if (!el) return;
+      el.style.opacity = '1';
+      el.style.pointerEvents = 'auto';
+      el.style.transform = 'translateY(0)';
+    });
+
+    window.removeEventListener('scroll', onFirstScroll);
+    window.removeEventListener('touchmove', onFirstScroll);
+    window.removeEventListener('wheel', onFirstScroll);
+  };
+
+  const onFirstScroll = () => {
+    if (window.scrollY > 5) show();
+  };
+
+  window.addEventListener('scroll', onFirstScroll, { passive: true });
+  window.addEventListener('touchmove', onFirstScroll, { passive: true });
+  window.addEventListener('wheel', onFirstScroll, { passive: true });
+})();
+</script>
