@@ -52,105 +52,92 @@
     Ring nu
   </div>
 </a>
-
+<a class="call-bar-mobile" href="tel:0763171284" aria-label="Ring HP Juridik">
+  <img class="call-bar-mobile__avatar" src="/static/head-phonecall.png" alt="Ring">
+  <div class="call-bar-mobile__text">
+    <div class="call-bar-mobile__title">Ring nu</div>
+    <div class="call-bar-mobile__sub">Prata direkt med jurist</div>
+  </div>
+  <div class="call-bar-mobile__cta">📞</div>
+</a>
 
 <style>
 /* ============================= */
-/* Desktop Sticky Call Widget   */
+/* DESKTOP widget (höger nere)   */
 /* ============================= */
+.call-widget-desktop { display: none; } /* default av */
+@media (min-width: 980px) {
+  .call-widget-desktop { display: flex; }
+}
 
-.call-widget-desktop {
+/* ============================= */
+/* MOBIL sticky bar (botten)     */
+/* ============================= */
+.call-bar-mobile{
   position: fixed;
-  right: 20px;
-  bottom: 20px;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
   z-index: 9999;
 
-  display: none;
+  display: none; /* visas via media query */
   align-items: center;
-  gap: 14px;
+  gap: 10px;
 
-  width: 420px;
-  max-width: calc(100vw - 40px);
-
-  padding: 14px 16px;
-  border-radius: 20px;
+  padding: 12px 14px;
+  border-radius: 18px;
 
   background: #0f1b2d;
   color: #fff;
   text-decoration: none;
 
-  box-shadow: 0 18px 50px rgba(0,0,0,0.18);
-  border: 1px solid rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,.10);
+  box-shadow: 0 16px 42px rgba(0,0,0,.18);
 
-  transition: transform .15s ease, opacity .2s ease;
+  /* iPhone safe area */
+  padding-bottom: calc(12px + env(safe-area-inset-bottom));
 }
 
-.call-widget-desktop:hover {
-  transform: translateY(-2px);
-}
-
-.call-avatar {
-  width: 50px;
-  height: 50px;
+.call-bar-mobile__avatar{
+  width: 42px;
+  height: 42px;
   border-radius: 999px;
   object-fit: cover;
-  border: 2px solid rgba(255,255,255,0.15);
-  flex-shrink: 0;
+  border: 2px solid rgba(255,255,255,.18);
+  flex: 0 0 auto;
 }
 
-.call-text {
-  flex: 1;
+.call-bar-mobile__text{
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.call-title {
-  font-weight: 800;
+.call-bar-mobile__title{
+  font-weight: 900;
   font-size: 16px;
   line-height: 1.1;
 }
 
-.call-sub {
-  font-size: 13px;
-  opacity: 0.85;
-  margin-top: 4px;
+.call-bar-mobile__sub{
+  font-size: 12px;
+  opacity: .85;
+  margin-top: 2px;
 }
 
-.call-button {
-  background: #2f8f5b;
-  padding: 10px 16px;
+.call-bar-mobile__cta{
+  width: 44px;
+  height: 44px;
   border-radius: 999px;
+  background: #2f8f5b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
   font-weight: 800;
-  font-size: 14px;
-  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
-/* Visa endast på desktop */
-@media (min-width: 980px) {
-  .call-widget-desktop {
-    display: flex;
-  }
+/* Visa bara på mobil */
+@media (max-width: 979px){
+  .call-bar-mobile{ display: flex; }
 }
-</style>
-
-
-<script>
-/* Visa först efter lite scroll */
-document.addEventListener("DOMContentLoaded", function() {
-  const widget = document.querySelector(".call-widget-desktop");
-  if (!widget) return;
-
-  widget.style.opacity = "0";
-  widget.style.pointerEvents = "none";
-
-  const showAfter = 200;
-
-  window.addEventListener("scroll", function() {
-    if (window.scrollY > showAfter) {
-      widget.style.opacity = "1";
-      widget.style.pointerEvents = "auto";
-    } else {
-      widget.style.opacity = "0";
-      widget.style.pointerEvents = "none";
-    }
-  });
-});
-</script>
