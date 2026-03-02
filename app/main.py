@@ -328,7 +328,7 @@ def create_checkout_session(agreement_id: str) -> str:
             "price_data": {
                 "currency": "sek",
                 "product_data": {"name": "Premium – Låna bil till skuldsatt"},
-                "unit_amount": 15000,  # 150 kr
+                "unit_amount": 1000,  # 10 kr
             },
             "quantity": 1,
         }],
