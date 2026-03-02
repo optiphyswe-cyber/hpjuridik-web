@@ -6,65 +6,52 @@
 
     <div class="cases-head">
       <h1>Låna bil till skuldsatt</h1>
+
       <div class="info-box" style="max-width: 900px; margin: 20px auto 30px auto;">
+        <h2>Varför är ett skriftligt låneavtal viktigt?</h2>
 
-  <h2>Varför är ett skriftligt låneavtal viktigt?</h2>
+        <p>
+          Enligt utsökningsbalken gäller en så kallad <strong>besittningspresumtion</strong>.
+          Det innebär i praktiken att egendom som finns i en persons besittning presumeras
+          tillhöra den personen.
+        </p>
 
-  <p>
-    Enligt utsökningsbalken gäller en så kallad <strong>besittningspresumtion</strong>.
-    Det innebär i praktiken att egendom som finns i en persons besittning
-    presumeras tillhöra den personen.
-  </p>
+        <p>
+          Om en person är skuldsatt och Kronofogden genomför en utmätning kan egendom som finns
+          i den skuldsattes faktiska besittning – exempelvis en bil som står parkerad vid bostaden –
+          antas tillhöra den skuldsatte, om inte motsatsen kan visas.
+        </p>
 
-  <p>
-    Om en person är skuldsatt och Kronofogden genomför en utmätning,
-    kan egendom som finns i den skuldsattes faktiska besittning –
-    exempelvis en bil som står parkerad vid bostaden –
-    antas tillhöra den skuldsatte, om inte motsatsen kan visas.
-  </p>
+        <h3>Hur kan ett låneavtal minska risken?</h3>
+        <p>Ett tydligt, daterat och undertecknat låneavtal:</p>
 
-  <h3>Vad innebär detta i praktiken?</h3>
+        <ul>
+          <li>Visar att äganderätten ligger kvar hos utlånaren</li>
+          <li>Dokumenterar att upplåtelsen är tillfällig</li>
+          <li>Stärker bevisningen vid en eventuell tvist eller utmätning</li>
+          <li>Kan bidra till att undvika felaktig utmätning</li>
+        </ul>
 
-  <p>
-    Om en bil är utlånad till en skuldsatt person utan tydlig dokumentation
-    finns en risk att den felaktigt tas upp som utmätningsbar egendom.
-    För att bryta presumtionen krävs att den verklige ägaren kan visa
-    att egendomen tillhör honom eller henne.
-  </p>
+        <p class="muted">
+          Observera: Avtalet är ett bevismedel, inte en absolut garanti. Myndighetsbedömningar sker alltid efter helhetsprövning.
+        </p>
+      </div>
 
-  <h3>Hur kan ett låneavtal minska risken?</h3>
-
-  <p>
-    Ett tydligt, daterat och undertecknat låneavtal:
-  </p>
-
-  <ul>
-    <li>Visar att äganderätten ligger kvar hos utlånaren</li>
-    <li>Dokumenterar att upplåtelsen är tillfällig</li>
-    <li>Stärker bevisningen vid en eventuell tvist eller utmätning</li>
-    <li>Kan bidra till att undvika felaktig utmätning</li>
-  </ul>
-
-  <p>
-    Avtalet är dock inte en absolut garanti, utan ett viktigt bevismedel.
-    Ju tydligare dokumentation som finns kring äganderätt och syfte,
-    desto starkare står den verklige ägaren vid en prövning.
-  </p>
-
-  <p class="muted">
-    Observera att varje situation bedöms individuellt och att ytterligare
-    bevisning kan krävas beroende på omständigheterna.
-  </p>
-
-</div>
       <p class="muted">
-        Fyll i uppgifterna nedan så skapar vi ett tillfälligt låneavtal för bil.
+        Fyll i uppgifterna nedan. Nästa steg blir en granskningssida där du kan kontrollera allt innan du väljer Gratis eller Premium.
       </p>
     </div>
 
-    {% if sent %}
+    {% if sent_ok %}
       <div class="success-box">
-        <strong>Klart!</strong> Avtalet är skapat.
+        <strong>Klart!</strong> Ditt meddelande är skickat.
+      </div>
+    {% endif %}
+
+    {% if sent_error %}
+      <div class="error-box">
+        <strong>Något gick fel.</strong>
+        <div class="error-detail">{{ sent_error }}</div>
       </div>
     {% endif %}
 
@@ -76,9 +63,10 @@
     {% endif %}
 
     <div class="form-card" style="max-width: 900px; margin: 0 auto;">
-      <form method="post" action="/lana-bil-till-skuldsatt" class="nice-form">
+      <form method="post" action="/lana-bil-till-skuldsatt/review" class="nice-form">
 
         <h2 style="margin-top:0;">Utlånare (ägare)</h2>
+
         <div class="two-col">
           <div class="form-group">
             <label for="utlanare_namn">Namn</label>
@@ -109,6 +97,7 @@
         <hr style="margin:24px 0;">
 
         <h2>Låntagare (skuldsatt)</h2>
+
         <div class="two-col">
           <div class="form-group">
             <label for="lantagare_namn">Namn</label>
@@ -139,20 +128,22 @@
         <hr style="margin:24px 0;">
 
         <h2>Fordon</h2>
+
         <div class="two-col">
           <div class="form-group">
-            <label for="bil_marke_modell">Märke och modell</label>
-            <input id="bil_marke_modell" name="bil_marke_modell" required placeholder="t.ex. Nissan Qashqai">
+            <label for="fordon_modell">Märke och modell</label>
+            <input id="fordon_modell" name="fordon_modell" required placeholder="t.ex. Nissan Qashqai">
           </div>
           <div class="form-group">
-            <label for="bil_regnr">Registreringsnummer</label>
-            <input id="bil_regnr" name="bil_regnr" required placeholder="t.ex. ABC123">
+            <label for="fordon_regnr">Registreringsnummer</label>
+            <input id="fordon_regnr" name="fordon_regnr" required placeholder="t.ex. ABC123">
           </div>
         </div>
 
         <hr style="margin:24px 0;">
 
         <h2>Avtalsperiod</h2>
+
         <div class="two-col">
           <div class="form-group">
             <label for="from_dt">Från (datum & tid)</label>
@@ -166,36 +157,41 @@
 
         <div class="form-group">
           <label for="andamal">Ändamål / syfte</label>
-          <textarea id="andamal" name="andamal" rows="5" required
-            placeholder="Beskriv varför bilen lånas. Skriv gärna ett syfte som gynnar utlånaren (t.ex. hämta medicin, hjälpa till med ärenden, transport, service etc.)."></textarea>
+          <textarea
+            id="andamal"
+            name="andamal"
+            rows="5"
+            required
+            placeholder="Beskriv varför bilen lånas. Skriv gärna tydligt och konkret."
+          ></textarea>
         </div>
-<div class="form-group" style="margin-top:20px; padding:16px; background:#f8f9fb; border:1px solid #e3e6ec; border-radius:8px;">
-  
-  <label style="display:flex; gap:10px; align-items:flex-start;">
-    <input type="checkbox" name="disclaimer_accept" required style="margin-top:4px;">
-    <span>
-      Jag bekräftar att detta avtal är ett standardiserat bevisunderlag baserat på mina egna uppgifter.
-      Jag är medveten om att HP Juridik inte lämnar någon garanti för att avtalet godtas av
-      Kronofogden, domstol eller annan part, samt att myndighetsbedömningar alltid sker
-      utifrån en helhetsprövning.
-    </span>
-  </label>
-<div class="form-group" style="margin-top:12px; padding:16px; background:#f8f9fb; border:1px solid #e3e6ec; border-radius:8px;">
-  <label style="display:flex; gap:10px; align-items:flex-start;">
-    <input type="checkbox" name="marketing_accept" required style="margin-top:4px;">
-    <span>
-      Jag godkänner att HP Juridik sparar min e-postadress för nyhetsutskick och information om juridiska tjänster.
-      Jag kan när som helst avregistrera mig.
-    </span>
-  </label>
-</div>
-</div>
+
+        <div class="form-group" style="margin-top:20px; padding:16px; background:#f8f9fb; border:1px solid #e3e6ec; border-radius:8px;">
+          <label style="display:flex; gap:10px; align-items:flex-start;">
+            <input type="checkbox" name="disclaimer_accept" required style="margin-top:4px;">
+            <span>
+              Jag bekräftar att detta avtal är ett standardiserat bevisunderlag baserat på mina egna uppgifter.
+              Jag är medveten om att HP Juridik inte lämnar någon garanti för att avtalet godtas av Kronofogden,
+              domstol eller annan part, samt att myndighetsbedömningar alltid sker utifrån en helhetsprövning.
+            </span>
+          </label>
+
+          <div style="margin-top:12px;">
+            <label style="display:flex; gap:10px; align-items:flex-start;">
+              <input type="checkbox" name="newsletter_optin" style="margin-top:4px;">
+              <span>
+                Jag vill gärna få nyhetsutskick och information om juridiska tjänster från HP Juridik. (Valfritt)
+              </span>
+            </label>
+          </div>
+        </div>
+
         <button type="submit" class="btn-primary btn-wide">
-          Skapa låneavtal (PDF)
+          Fortsätt till granskning
         </button>
 
         <p class="muted" style="margin-top:12px;">
-          Nästa steg: möjlighet att signera med BankID (tilläggstjänst).
+          Nästa steg: granska uppgifterna och välj Gratis (PDF-nedladdning) eller Premium (150 kr).
         </p>
 
       </form>
