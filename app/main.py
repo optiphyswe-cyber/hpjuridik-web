@@ -1,222 +1,211 @@
 import os
-import stripe
-import httpx
+import io
+import json
+import uuid
 from datetime import datetime, timezone
+from typing import Any, Dict, Optional, List
 
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse
+import httpx
+import stripe
+from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import RedirectResponse
 
-# =========================
+# PDF
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+
+# =============================================================================
 # App setup
-# =========================
+# =============================================================================
 
 app = FastAPI()
 
-app.mount("/static", StaticFiles(directory="app/static"), name="static")
-templates = Jinja2Templates(directory="app/templates")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 
-# =========================
-# Environment
-# =========================
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
 
-POSTMARK_SERVER_TOKEN = os.getenv("POSTMARK_SERVER_TOKEN")
-LEAD_INBOX = os.getenv("LEAD_INBOX")
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
+# =============================================================================
+# ENV
+# =============================================================================
 
+SITE_URL = os.getenv("SITE_URL", "https://www.hpjuridik.se").rstrip("/")
+
+POSTMARK_SERVER_TOKEN = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()
+MAIL_FROM = os.getenv("MAIL_FROM", "lanabil@hpjuridik.se").strip()
+LEAD_INBOX = os.getenv("LEAD_INBOX", "lanabil@hpjuridik.se").strip()
+CONTACT_TO = os.getenv("CONTACT_TO", "hp@hpjuridik.se").strip()
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 stripe.api_key = STRIPE_SECRET_KEY
 
-BASE_URL = "https://hpjuridik.se"
+# Oneflow
+ONEFLOW_API_TOKEN = os.getenv("ONEFLOW_API_TOKEN", "").strip()
+ONEFLOW_WORKSPACE_ID = os.getenv("ONEFLOW_WORKSPACE_ID", "").strip()
+ONEFLOW_TEMPLATE_ID = os.getenv("ONEFLOW_TEMPLATE_ID", "").strip()
 
+AGREEMENTS_DIR = "/tmp/agreements"
+os.makedirs(AGREEMENTS_DIR, exist_ok=True)
 
-# =========================
-# Helper: Postmark
-# =========================
+# =============================================================================
+# Helpers
+# =============================================================================
 
-async def send_email(subject: str, body: str):
-    if not POSTMARK_SERVER_TOKEN:
-        print("POSTMARK_SERVER_TOKEN saknas")
-        return
+def agreement_path(aid: str):
+    return os.path.join(AGREEMENTS_DIR, f"{aid}.json")
+
+def save_agreement(aid: str, data: Dict[str, Any]):
+    with open(agreement_path(aid), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False)
+
+def load_agreement(aid: str):
+    p = agreement_path(aid)
+    if not os.path.exists(p):
+        raise HTTPException(404, "Agreement not found")
+    with open(p, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+async def postmark_send(to: str, subject: str, text_body: str):
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Postmark-Server-Token": POSTMARK_SERVER_TOKEN,
+    }
+    payload = {
+        "From": MAIL_FROM,
+        "To": to,
+        "Subject": subject,
+        "TextBody": text_body,
+    }
+    async with httpx.AsyncClient() as client:
+        r = await client.post("https://api.postmarkapp.com/email", headers=headers, json=payload)
+        r.raise_for_status()
+
+# =============================================================================
+# PDF builder
+# =============================================================================
+
+def build_pdf(data: dict) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
+    styles = getSampleStyleSheet()
+    story = []
+
+    story.append(Paragraph("TILLFÄLLIGT LÅNEAVTAL – BIL", styles["Title"]))
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph(f"Utlånare: {data['utlanare']['namn']}", styles["Normal"]))
+    story.append(Paragraph(f"Låntagare: {data['lantagare']['namn']}", styles["Normal"]))
+    story.append(Paragraph(f"Regnr: {data['fordon']['regnr']}", styles["Normal"]))
+    story.append(Paragraph(f"Period: {data['period']['from']} → {data['period']['to']}", styles["Normal"]))
+    story.append(Spacer(1, 20))
+
+    story.append(Paragraph("Underskrifter:", styles["Heading2"]))
+    story.append(Spacer(1, 40))
+
+    doc.build(story)
+    return buf.getvalue()
+
+# =============================================================================
+# Oneflow integration
+# =============================================================================
+
+async def create_oneflow_document(agreement_id: str, agreement: dict):
+    if not ONEFLOW_API_TOKEN:
+        raise RuntimeError("ONEFLOW_API_TOKEN saknas")
+
+    headers = {
+        "Authorization": f"Bearer {ONEFLOW_API_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    fp = agreement["form_payload"]
+
+    payload = {
+        "workspace_id": ONEFLOW_WORKSPACE_ID,
+        "template_id": ONEFLOW_TEMPLATE_ID,
+        "title": f"Låneavtal bil – {fp['fordon']['regnr']}",
+        "participants": [
+            {"name": fp["utlanare"]["namn"], "email": fp["utlanare"]["epost"], "role": "Signer"},
+            {"name": fp["lantagare"]["namn"], "email": fp["lantagare"]["epost"], "role": "Signer"},
+        ],
+    }
 
     async with httpx.AsyncClient() as client:
-        await client.post(
-            "https://api.postmarkapp.com/email",
-            headers={
-                "X-Postmark-Server-Token": POSTMARK_SERVER_TOKEN,
-                "Accept": "application/json",
-            },
-            json={
-                "From": LEAD_INBOX,
-                "To": LEAD_INBOX,
-                "Subject": subject,
-                "TextBody": body,
-            },
-        )
+        r = await client.post("https://api.oneflow.com/v1/documents", headers=headers, json=payload)
+        r.raise_for_status()
+        return r.json()
 
-
-# =========================
-# Home
-# =========================
-
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    return templates.TemplateResponse("pages/home.html", {"request": request})
-
-
-# =========================
-# CONTACT
-# =========================
+# =============================================================================
+# Contact
+# =============================================================================
 
 @app.get("/contact", response_class=HTMLResponse)
-@app.get("/kontakta-oss", response_class=HTMLResponse)
-def contact_get(request: Request):
-    return templates.TemplateResponse(
-        "pages/contact.html",
-        {"request": request, "sent": False}
-    )
-
+def contact(request: Request):
+    return templates.TemplateResponse("pages/contact.html", {"request": request})
 
 @app.post("/contact", response_class=HTMLResponse)
-@app.post("/kontakta-oss", response_class=HTMLResponse)
-async def contact_post(
+async def contact_submit(
     request: Request,
     namn: str = Form(...),
     epost: str = Form(...),
     telefon: str = Form(""),
     meddelande: str = Form(...)
 ):
-    ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
-
+    subject = f"HP Juridik | Ny kontaktförfrågan från {namn}"
     body = f"""
-NY KONTAKTFÖRFRÅGAN
-
 Namn: {namn}
 E-post: {epost}
 Telefon: {telefon}
 Meddelande:
 {meddelande}
-
-Tid: {ts}
 """
-
     try:
-        await send_email("Ny kontaktförfrågan – HP Juridik", body)
+        await postmark_send(CONTACT_TO, subject, body)
         sent = True
     except Exception as e:
-        print(e)
+        print("Mail error:", e)
         sent = False
 
     return templates.TemplateResponse(
         "pages/contact.html",
-        {"request": request, "sent": sent}
+        {"request": request, "sent_ok": sent}
     )
 
+# =============================================================================
+# Stripe webhook
+# =============================================================================
 
-# =========================
-# LÅNA BIL – FORM
-# =========================
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig = request.headers.get("stripe-signature")
 
-@app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
-def lana_bil_form(request: Request):
-    return templates.TemplateResponse(
-        "pages/lana_bil.html",
-        {"request": request}
-    )
+    event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
 
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        if session["payment_status"] == "paid":
+            agreement_id = session["metadata"]["agreement_id"]
+            ag = load_agreement(agreement_id)
 
-# =========================
-# REVIEW (POST ONLY)
-# =========================
+            ag["status"] = "paid"
+            save_agreement(agreement_id, ag)
 
-@app.get("/lana-bil-till-skuldsatt/review")
-def review_redirect():
-    return RedirectResponse("/lana-bil-till-skuldsatt")
+            try:
+                oneflow_response = await create_oneflow_document(agreement_id, ag)
+                ag["oneflow"] = oneflow_response
+                save_agreement(agreement_id, ag)
+            except Exception as e:
+                print("Oneflow error:", e)
 
-
-@app.post("/lana-bil-till-skuldsatt/review", response_class=HTMLResponse)
-def lana_bil_review(
-    request: Request,
-    utlanare_namn: str = Form(...),
-    utlanare_epost: str = Form(...),
-    lantagare_namn: str = Form(...),
-    lantagare_epost: str = Form(...),
-    bil_marke_modell: str = Form(...),
-    bil_regnr: str = Form(...),
-    andamal: str = Form(...)
-):
-    data = {
-        "utlanare_namn": utlanare_namn,
-        "utlanare_epost": utlanare_epost,
-        "lantagare_namn": lantagare_namn,
-        "lantagare_epost": lantagare_epost,
-        "bil_marke_modell": bil_marke_modell,
-        "bil_regnr": bil_regnr,
-        "andamal": andamal,
-    }
-
-    return templates.TemplateResponse(
-        "pages/lana_bil_review.html",
-        {"request": request, **data}
-    )
-
-
-# =========================
-# GRATIS
-# =========================
-
-@app.post("/lana-bil-gratis")
-async def lana_bil_gratis(
-    utlanare_namn: str = Form(...),
-    utlanare_epost: str = Form(...),
-    lantagare_namn: str = Form(...),
-    lantagare_epost: str = Form(...),
-    bil_marke_modell: str = Form(...),
-    bil_regnr: str = Form(...),
-):
-    body = f"""
-GRATIS NEDLADDNING
-
-Utlånare: {utlanare_namn} ({utlanare_epost})
-Låntagare: {lantagare_namn} ({lantagare_epost})
-Bil: {bil_marke_modell}
-Regnr: {bil_regnr}
-"""
-
-    await send_email("Lead – Låna bil (gratis)", body)
-
-    return RedirectResponse("/lana-bil-till-skuldsatt?success=1", status_code=303)
-
-
-# =========================
-# PREMIUM → STRIPE
-# =========================
-
-@app.post("/lana-bil-premium")
-def lana_bil_premium():
-    session = stripe.checkout.Session.create(
-        payment_method_types=["card"],
-        line_items=[{
-            "price_data": {
-                "currency": "sek",
-                "product_data": {
-                    "name": "Premium låneavtal bil"
-                },
-                "unit_amount": 100,  # 1 kr test
-            },
-            "quantity": 1,
-        }],
-        mode="payment",
-        success_url=BASE_URL + "/checkout-success",
-        cancel_url=BASE_URL + "/lana-bil-till-skuldsatt",
-    )
-
-    return RedirectResponse(session.url, status_code=303)
-
-
-@app.get("/checkout-success", response_class=HTMLResponse)
-def checkout_success(request: Request):
-    return templates.TemplateResponse(
-        "pages/checkout_success.html",
-        {"request": request}
-    )
+    return {"ok": True}
