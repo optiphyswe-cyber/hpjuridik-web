@@ -1,35 +1,141 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Granska uppgifter</h1>
 
-<div class="card">
-  <p><b>Utlånare:</b> {{ payload.utlanare.namn }}</p>
-  <p><b>Låntagare:</b> {{ payload.lantagare.namn }}</p>
-  <p><b>Fordon:</b> {{ payload.fordon.marke_modell }} ({{ payload.fordon.regnr }})</p>
-  <p><b>Period:</b> {{ payload.period.from_dt }} → {{ payload.period.to_dt }}</p>
-  <p><b>Ändamål:</b> {{ payload.andamal }}</p>
-</div>
+<section class="section">
+  <div class="container" style="max-width: 980px;">
 
-<form method="post" action="/lana-bil-till-skuldsatt/free">
-  {% for key, value in payload.items() %}
-    <input type="hidden" name="{{ key }}" value="{{ value }}">
-  {% endfor %}
-  <label>
-    <input type="checkbox" name="confirm_correct" required>
-    Jag har kontrollerat att uppgifterna är korrekta
-  </label>
-  <button type="submit">Gratis – Ladda ner PDF</button>
-</form>
+    <div class="cases-head">
+      <h1>Granska uppgifter</h1>
+      <p class="muted">
+        Kontrollera att allt stämmer innan du fortsätter. Du kan välja Gratis (PDF-nedladdning) eller Premium (150 kr).
+      </p>
+    </div>
 
-<form method="post" action="/lana-bil-till-skuldsatt/paid">
-  {% for key, value in payload.items() %}
-    <input type="hidden" name="{{ key }}" value="{{ value }}">
-  {% endfor %}
-  <label>
-    <input type="checkbox" name="confirm_correct" required>
-    Jag har kontrollerat att uppgifterna är korrekta
-  </label>
-  <button type="submit">Premium – Betala 150 kr</button>
-</form>
+    {% if error %}
+      <div class="error-box">
+        <strong>Något gick fel.</strong>
+        <div class="error-detail">{{ error }}</div>
+      </div>
+    {% endif %}
+
+    <div class="form-card" style="margin: 0 auto;">
+      <h2 style="margin-top:0;">Sammanfattning</h2>
+
+      <div style="display:grid; gap:18px;">
+        <div>
+          <h3 style="margin:0 0 8px 0;">Utlånare (ägare)</h3>
+          <div class="muted">
+            <div><strong>Namn:</strong> {{ data.utlanare.namn }}</div>
+            {% if data.utlanare.pnr %}<div><strong>Personnr:</strong> {{ data.utlanare.pnr }}</div>{% endif %}
+            <div><strong>Adress:</strong> {{ data.utlanare.adress }}</div>
+            <div><strong>Telefon:</strong> {{ data.utlanare.tel }}</div>
+            <div><strong>E-post:</strong> {{ data.utlanare.epost }}</div>
+          </div>
+        </div>
+
+        <hr>
+
+        <div>
+          <h3 style="margin:0 0 8px 0;">Låntagare (skuldsatt)</h3>
+          <div class="muted">
+            <div><strong>Namn:</strong> {{ data.lantagare.namn }}</div>
+            {% if data.lantagare.pnr %}<div><strong>Personnr:</strong> {{ data.lantagare.pnr }}</div>{% endif %}
+            <div><strong>Adress:</strong> {{ data.lantagare.adress }}</div>
+            <div><strong>Telefon:</strong> {{ data.lantagare.tel }}</div>
+            <div><strong>E-post:</strong> {{ data.lantagare.epost }}</div>
+          </div>
+        </div>
+
+        <hr>
+
+        <div>
+          <h3 style="margin:0 0 8px 0;">Fordon</h3>
+          <div class="muted">
+            <div><strong>Märke/Modell:</strong> {{ data.fordon.modell }}</div>
+            <div><strong>Registreringsnummer:</strong> {{ data.fordon.regnr }}</div>
+          </div>
+        </div>
+
+        <hr>
+
+        <div>
+          <h3 style="margin:0 0 8px 0;">Avtalsperiod</h3>
+          <div class="muted">
+            <div><strong>Från:</strong> {{ data.period.from_str }}</div>
+            <div><strong>Till:</strong> {{ data.period.to_str }}</div>
+          </div>
+        </div>
+
+        <hr>
+
+        <div>
+          <h3 style="margin:0 0 8px 0;">Ändamål / syfte</h3>
+          <div class="muted" style="white-space: pre-wrap;">{{ data.andamal }}</div>
+        </div>
+
+        <hr>
+
+        <div class="muted" style="display:grid; gap:10px;">
+          <label style="display:flex; gap:10px; align-items:flex-start;">
+            <input type="checkbox" name="confirm_correct" required style="margin-top:4px;">
+            <span>
+              Jag har kontrollerat att uppgifterna är korrekta.
+            </span>
+          </label>
+
+          <label style="display:flex; gap:10px; align-items:flex-start;">
+            <input type="checkbox" name="disclaimer_accept" required style="margin-top:4px;">
+            <span>
+              Jag bekräftar att detta avtal är ett standardiserat bevisunderlag baserat på mina egna uppgifter.
+              Jag är medveten om att HP Juridik inte lämnar någon garanti för att avtalet godtas av Kronofogden,
+              domstol eller annan part, samt att myndighetsbedömningar alltid sker utifrån en helhetsprövning.
+            </span>
+          </label>
+
+          <div class="muted" style="margin-top:6px;">
+            <strong>Nyhetsbrev:</strong>
+            {% if data.newsletter_optin %}
+              Du har tackat ja till nyhetsutskick.
+            {% else %}
+              Du har inte tackat ja till nyhetsutskick.
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:18px;">
+        <!-- GRATIS -->
+        <form method="post" action="/lana-bil-till-skuldsatt/free" style="margin:0;">
+          <input type="hidden" name="agreement_id" value="{{ agreement_id }}">
+          <input type="hidden" name="confirm_correct" value="1">
+          <input type="hidden" name="disclaimer_accept" value="1">
+          <button type="submit" class="btn-primary">
+            Gratis – Ladda ner PDF
+          </button>
+        </form>
+
+        <!-- PREMIUM -->
+        <form method="post" action="/lana-bil-till-skuldsatt/paid" style="margin:0;">
+          <input type="hidden" name="agreement_id" value="{{ agreement_id }}">
+          <input type="hidden" name="confirm_correct" value="1">
+          <input type="hidden" name="disclaimer_accept" value="1">
+          <button type="submit" class="btn-primary" style="background:#111;">
+            Premium – Betala 150 kr
+          </button>
+        </form>
+
+        <a href="/lana-bil-till-skuldsatt" class="muted" style="align-self:center; text-decoration:underline;">
+          Gå tillbaka och ändra
+        </a>
+      </div>
+
+      <p class="muted" style="margin-top:14px;">
+        <strong>Premium:</strong> Efter betalning skickas signeringslänk (BankID) i nästa steg när signeringstjänst är aktiverad.
+      </p>
+
+    </div>
+
+  </div>
+</section>
 
 {% endblock %}
