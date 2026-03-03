@@ -1,90 +1,27 @@
-"""
-HP Juridik – FastAPI app (stabil “main”)
-
-Mål:
-- Kontaktformulär ska fungera klockrent och STANNA på sidan (ingen redirect till /kontakta-oss om den inte redan är där).
-- Låna bil till skuldsatt:
-  - Steg 1: formulär -> review-sida (GET) med två val: Gratis PDF / Premium betalning.
-  - Gratis: skapa PDF + maila PDF + lead-info till rätt inbox.
-  - Premium: Stripe Checkout -> webhook -> maila PDF + skapa Oneflow-signering (om aktiverat).
-- Oneflow är OPTIONAL. Om env-variabler saknas faller funktionerna tillbaka till “maila PDF + lead”.
-
-VIKTIGA ENV (Render):
-BASE_URL=https://hpjuridik.se
-POSTMARK_SERVER_TOKEN=...
-MAIL_FROM=lanabil@hpjuridik.se   (avsändare för systemmail)
-CONTACT_TO=hp@hpjuridik.se      (kontaktformulärets mottagare)
-LEAD_INBOX=lanabil@hpjuridik.se (mottagare för “låna bil”-leads)
-
-STRIPE:
-STRIPE_SECRET_KEY=sk_live_...
-STRIPE_WEBHOOK_SECRET=whsec_...
-
-ONEFLOW (valfritt):
-ONEFLOW_API_TOKEN=...
-ONEFLOW_BASE_URL=https://api.oneflow.com (eller enligt ert konto)
-ONEFLOW_WORKSPACE_ID=...
-ONEFLOW_TEMPLATE_ID=...
-
-Katalogstruktur (som ni har):
-app/
-  main.py  (denna fil)
-  templates/
-    partials/base.html
-    pages/home.html
-    pages/contact.html
-    pages/lana_bil.html
-    pages/lana_bil_review.html
-    pages/terms.html
-    pages/services.html
-    pages/page.html
-  static/...
-
-OBS:
-- Alla endpoints returnerar HTML där det ska vara HTML.
-- /health ger JSON för Render/övervakning.
-- HEAD / svarar 200 (Render gör ofta HEAD-check).
-"""
-
 from __future__ import annotations
 
 import base64
-import hashlib
-import hmac
 import io
 import json
 import os
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import httpx
 import stripe
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
-from jinja2 import Environment
-from starlette.middleware.proxy_headers import ProxyHeadersMiddleware
 from starlette.templating import Jinja2Templates
 
-# PDF
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfgen import canvas
 
 
-# ------------------------------------------------------------------------------
-# App setup
-# ------------------------------------------------------------------------------
-
 app = FastAPI()
-
-# Render / proxy headers (för rätt schema/host bakom proxy)
-app.add_middleware(ProxyHeadersMiddleware, trusted_hosts="*")
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
@@ -94,13 +31,9 @@ templates = Jinja2Templates(directory=TEMPLATES_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-# ------------------------------------------------------------------------------
-# Env helpers
-# ------------------------------------------------------------------------------
-
 def env(name: str, default: Optional[str] = None) -> Optional[str]:
     v = os.getenv(name)
-    if v is None or v == "":
+    if not v:
         return default
     return v
 
@@ -120,14 +53,9 @@ ONEFLOW_BASE_URL = env("ONEFLOW_BASE_URL", "https://api.oneflow.com")
 ONEFLOW_WORKSPACE_ID = env("ONEFLOW_WORKSPACE_ID")
 ONEFLOW_TEMPLATE_ID = env("ONEFLOW_TEMPLATE_ID")
 
-# Stripe init
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
-
-# ------------------------------------------------------------------------------
-# Utilities
-# ------------------------------------------------------------------------------
 
 def now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -135,10 +63,6 @@ def now_utc() -> datetime:
 
 def iso_dt(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-
-
-def safe(s: Optional[str]) -> str:
-    return (s or "").strip()
 
 
 def page_ctx(request: Request, path: str, title: str, meta_desc: str = "") -> Dict[str, Any]:
@@ -152,10 +76,6 @@ def page_ctx(request: Request, path: str, title: str, meta_desc: str = "") -> Di
     }
 
 
-# ------------------------------------------------------------------------------
-# Postmark mail
-# ------------------------------------------------------------------------------
-
 async def postmark_send(
     *,
     to_email: str,
@@ -165,10 +85,6 @@ async def postmark_send(
     reply_to: Optional[str] = None,
     attachments: Optional[list] = None,
 ) -> None:
-    """
-    Skickar mail via Postmark.
-    attachments: [{"Name": "...pdf", "Content": "<base64>", "ContentType":"application/pdf"}]
-    """
     if not POSTMARK_SERVER_TOKEN:
         raise RuntimeError("POSTMARK_SERVER_TOKEN saknas i environment")
 
@@ -205,20 +121,10 @@ def pdf_to_attachment(filename: str, pdf_bytes: bytes) -> Dict[str, Any]:
     }
 
 
-# ------------------------------------------------------------------------------
-# PDF generation (låneavtal)
-# ------------------------------------------------------------------------------
-
 def build_loan_pdf(data: Dict[str, Any]) -> bytes:
-    """
-    Skapar enkel PDF. (Ni kan bygga ut texten hur mycket ni vill.)
-    """
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     w, h = A4
-
-    # Enkel typsnitt fallback (Reportlab standard)
-    # Om ni vill ha svensk font: lägg en .ttf i app/static eller app/fonts och registrera här.
     y = h - 25 * mm
 
     def line(txt: str, dy: float = 7 * mm, size: int = 11, bold: bool = False):
@@ -253,13 +159,10 @@ def build_loan_pdf(data: Dict[str, Any]) -> bytes:
     line(f"Till: {data.get('to_dt','')}", dy=10 * mm)
 
     line("Ändamål / syfte", bold=True)
-    # Wrap crude
-    txt = (data.get("andamal") or "").strip()
-    if not txt:
-        txt = "-"
+    txt = (data.get("andamal") or "").strip() or "-"
     c.setFont("Helvetica", 11)
     max_chars = 95
-    for chunk in [txt[i:i+max_chars] for i in range(0, len(txt), max_chars)]:
+    for chunk in [txt[i:i + max_chars] for i in range(0, len(txt), max_chars)]:
         c.drawString(20 * mm, y, chunk)
         y -= 6 * mm
         if y < 25 * mm:
@@ -267,19 +170,10 @@ def build_loan_pdf(data: Dict[str, Any]) -> bytes:
             y = h - 25 * mm
             c.setFont("Helvetica", 11)
 
-    y -= 6 * mm
-    line("Notering", bold=True)
-    line("Detta dokument är ett standardiserat bevisunderlag baserat på angivna uppgifter.")
-    line("Ingen garanti lämnas för myndighetsbedömning. Varje situation prövas individuellt.", size=10)
-
     c.showPage()
     c.save()
     return buf.getvalue()
 
-
-# ------------------------------------------------------------------------------
-# Oneflow (OPTIONAL)
-# ------------------------------------------------------------------------------
 
 @dataclass
 class OneflowConfig:
@@ -308,11 +202,6 @@ async def oneflow_create_contract_from_template(
     lantagare_email: str,
     variables: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Skapar kontrakt från template, fyller variabler och lägger till parter.
-    OBS: Oneflow API kan skilja beroende på version/inställningar.
-    Den här funktionen är skriven för att vara “best effort” och INTE krascha hela flödet.
-    """
     headers = {
         "Authorization": f"Bearer {cfg.token}",
         "Content-Type": "application/json",
@@ -320,47 +209,25 @@ async def oneflow_create_contract_from_template(
     }
 
     async with httpx.AsyncClient(timeout=45) as client:
-        # 1) Create contract from template
-        # Oneflow brukar ha endpoint: POST /contracts/create_from_template eller liknande.
-        # Vi kör defensivt med en vanlig pattern och låter fel bubbla till caller som “optional”.
-        create_url_candidates = [
+        r = await client.post(
             f"{cfg.base_url}/contracts/create_from_template",
-            f"{cfg.base_url}/contracts/template/{cfg.template_id}",
-            f"{cfg.base_url}/contracts",
-        ]
+            headers=headers,
+            json={
+                "workspace_id": cfg.workspace_id,
+                "template_id": cfg.template_id,
+                "name": f"HP Juridik – Låna bil ({agreement_id})",
+                "external_id": agreement_id,
+            },
+        )
+        if r.status_code >= 300:
+            raise RuntimeError(f"Oneflow create error {r.status_code}: {r.text}")
 
-        last_err = None
-        contract = None
-
-        for url in create_url_candidates:
-            try:
-                r = await client.post(
-                    url,
-                    headers=headers,
-                    json={
-                        "workspace_id": cfg.workspace_id,
-                        "template_id": cfg.template_id,
-                        "name": f"HP Juridik – Låna bil ({agreement_id})",
-                        "external_id": agreement_id,
-                    },
-                )
-                if r.status_code < 300:
-                    contract = r.json()
-                    break
-                last_err = f"{r.status_code} {r.text}"
-            except Exception as e:
-                last_err = str(e)
-
-        if not contract:
-            raise RuntimeError(f"Oneflow: kunde inte skapa kontrakt (testade flera endpoints): {last_err}")
-
+        contract = r.json()
         contract_id = contract.get("id") or contract.get("contract_id") or contract.get("data", {}).get("id")
         if not contract_id:
-            # fallback: ibland returneras hela objektet utan id-fält vi känner igen
             raise RuntimeError(f"Oneflow: kunde inte läsa contract id. Response: {contract}")
 
-        # 2) Apply template variables (best effort)
-        # ofta: POST /contracts/{id}/variables eller PUT /contracts/{id}
+        # Best effort: variables/participants/publish
         try:
             await client.post(
                 f"{cfg.base_url}/contracts/{contract_id}/variables",
@@ -368,11 +235,8 @@ async def oneflow_create_contract_from_template(
                 json={"variables": variables},
             )
         except Exception:
-            # Ignorera om endpoint saknas, kör bara vidare.
             pass
 
-        # 3) Add participants (best effort)
-        # ofta: POST /contracts/{id}/participants
         try:
             await client.post(
                 f"{cfg.base_url}/contracts/{contract_id}/participants",
@@ -387,8 +251,6 @@ async def oneflow_create_contract_from_template(
         except Exception:
             pass
 
-        # 4) Start signing (best effort)
-        # ofta: POST /contracts/{id}/publish eller /send
         try:
             await client.post(f"{cfg.base_url}/contracts/{contract_id}/publish", headers=headers, json={})
         except Exception:
@@ -397,21 +259,14 @@ async def oneflow_create_contract_from_template(
         return {"contract_id": contract_id, "raw": contract}
 
 
-# ------------------------------------------------------------------------------
-# Stripe helpers
-# ------------------------------------------------------------------------------
+PRICE_PREMIUM_SEK = 150
 
-PRICE_PREMIUM_SEK = 150  # kan ändras till 1 för test med 100 öre (Stripe: amount i öre)
 
 def stripe_amount_ore(sek: int) -> int:
     return int(sek) * 100
 
 
 def make_order_token(payload: Dict[str, Any]) -> str:
-    """
-    Skapar en “order token” som vi kan skicka mellan steg utan DB.
-    OBS: För enklare stabilitet: vi bas64-encodar JSON. (Ni kan signera den om ni vill.)
-    """
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
 
@@ -456,10 +311,6 @@ def verify_stripe_webhook(payload: bytes, sig_header: str) -> stripe.Event:
     return stripe.Webhook.construct_event(payload=payload, sig_header=sig_header, secret=STRIPE_WEBHOOK_SECRET)
 
 
-# ------------------------------------------------------------------------------
-# Routes: health + pages
-# ------------------------------------------------------------------------------
-
 @app.get("/health", response_class=JSONResponse)
 async def health() -> Dict[str, Any]:
     return {"ok": True, "time": iso_dt(now_utc())}
@@ -467,7 +318,6 @@ async def health() -> Dict[str, Any]:
 
 @app.head("/", response_class=Response)
 async def head_root() -> Response:
-    # Render skickar HEAD; svara 200.
     return Response(status_code=200)
 
 
@@ -495,14 +345,9 @@ async def terms(request: Request) -> HTMLResponse:
     )
 
 
-# ------------------------------------------------------------------------------
-# Contact form (MÅSTE FUNKA + ingen redirect)
-# ------------------------------------------------------------------------------
-
 @app.get("/kontakta-oss", response_class=HTMLResponse)
 async def contact_page(request: Request) -> HTMLResponse:
     ctx = page_ctx(request, "/kontakta-oss", "Kontakt | HP Juridik", "Kontakta oss")
-    # default: inget skickat
     ctx.update({"sent_ok": False, "sent_err": None})
     return templates.TemplateResponse("pages/contact.html", ctx)
 
@@ -550,13 +395,8 @@ async def contact_submit(
 
     ctx = page_ctx(request, "/kontakta-oss", "Kontakt | HP Juridik", "Kontakta oss")
     ctx.update({"sent_ok": ok, "sent_err": err})
-    # STANNA PÅ SIDAN (ingen redirect)
     return templates.TemplateResponse("pages/contact.html", ctx)
 
-
-# ------------------------------------------------------------------------------
-# Låna bil – form + review + gratis/premium
-# ------------------------------------------------------------------------------
 
 @app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
 async def lana_bil_form(request: Request) -> HTMLResponse:
@@ -613,8 +453,6 @@ async def lana_bil_submit_to_review(
     }
 
     token = make_order_token(payload)
-
-    # Review-sidan är GET så att refresh inte duplicerar POST
     return RedirectResponse(url=f"/lana-bil-till-skuldsatt/review?token={token}", status_code=303)
 
 
@@ -645,21 +483,17 @@ async def lana_bil_free(request: Request, token: str = Form(...)) -> HTMLRespons
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid token")
 
-    # build pdf
     pdf_bytes = build_loan_pdf(order)
     filename = f"laneavtal-bil-{order['agreement_id']}.pdf"
     attach = pdf_to_attachment(filename, pdf_bytes)
 
-    # maila PDF till båda parter
     subj_user = "HP Juridik – Ditt låneavtal (PDF)"
     text_user = (
         "Hej!\n\n"
         "Här kommer ditt låneavtal (PDF) baserat på uppgifterna du angivit.\n\n"
-        "Vänligen kontrollera att allt stämmer.\n\n"
         "/HP Juridik\n"
     )
 
-    # lead-mail till inbox
     subj_lead = "Lead: Låna bil till skuldsatt (Gratis nedladdning)"
     lead_body = (
         "NY LEAD (GRATIS)\n"
@@ -676,24 +510,9 @@ async def lana_bil_free(request: Request, token: str = Form(...)) -> HTMLRespons
 
     err = None
     try:
-        await postmark_send(
-            to_email=order["utlanare_epost"],
-            subject=subj_user,
-            text_body=text_user,
-            attachments=[attach],
-        )
-        await postmark_send(
-            to_email=order["lantagare_epost"],
-            subject=subj_user,
-            text_body=text_user,
-            attachments=[attach],
-        )
-        await postmark_send(
-            to_email=LEAD_INBOX,
-            subject=subj_lead,
-            text_body=lead_body,
-            attachments=[attach],
-        )
+        await postmark_send(to_email=order["utlanare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
+        await postmark_send(to_email=order["lantagare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
+        await postmark_send(to_email=LEAD_INBOX, subject=subj_lead, text_body=lead_body, attachments=[attach])
     except Exception as e:
         err = str(e)
 
@@ -712,7 +531,6 @@ async def lana_bil_premium_start(request: Request, token: str = Form(...)) -> Re
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=400, detail="Stripe not configured")
 
-    # välj vilken mail Stripe ska koppla till (utlånare räcker oftast)
     customer_email = order.get("utlanare_epost") or order.get("lantagare_epost")
     url = await stripe_create_checkout_session(order_token=token, customer_email=customer_email)
     return RedirectResponse(url=url, status_code=303)
@@ -720,11 +538,7 @@ async def lana_bil_premium_start(request: Request, token: str = Form(...)) -> Re
 
 @app.get("/checkout-success", response_class=HTMLResponse)
 async def checkout_success(request: Request, session_id: str) -> HTMLResponse:
-    # enkel “tack”-sida; webhook sköter resten
-    return HTMLResponse(
-        "<h1>Tack!</h1><p>Betalning mottagen. (Webhooken sköter resten.)</p>",
-        status_code=200,
-    )
+    return HTMLResponse("<h1>Tack!</h1><p>Betalning mottagen. (Webhooken sköter resten.)</p>", status_code=200)
 
 
 @app.post("/stripe/webhook", response_class=JSONResponse)
@@ -737,117 +551,90 @@ async def stripe_webhook(request: Request) -> JSONResponse:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Webhook verification failed: {e}")
 
-    # Vi bryr oss främst om Checkout Session Completed
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        metadata = session.get("metadata", {}) or {}
-        token = metadata.get("order_token")
-        if not token:
-            return JSONResponse({"ok": True, "ignored": True})
+    if event["type"] != "checkout.session.completed":
+        return JSONResponse({"ok": True})
 
+    session = event["data"]["object"]
+    metadata = session.get("metadata", {}) or {}
+    token = metadata.get("order_token")
+    if not token:
+        return JSONResponse({"ok": True, "ignored": True})
+
+    try:
+        order = parse_order_token(token)
+    except Exception:
+        return JSONResponse({"ok": True, "ignored": True})
+
+    pdf_bytes = build_loan_pdf(order)
+    filename = f"laneavtal-bil-{order['agreement_id']}.pdf"
+    attach = pdf_to_attachment(filename, pdf_bytes)
+
+    subj_user = "HP Juridik – Premium: Ditt låneavtal (PDF)"
+    text_user = (
+        "Hej!\n\n"
+        "Här kommer ditt låneavtal (PDF).\n"
+        "Premium: digital signering initieras i nästa steg (om Oneflow är aktiverat).\n\n"
+        "/HP Juridik\n"
+    )
+
+    subj_lead = "Lead: Låna bil till skuldsatt (Premium betalning)"
+    lead_body = (
+        "NY LEAD (PREMIUM)\n"
+        "=================\n\n"
+        f"Agreement ID: {order.get('agreement_id')}\n"
+        f"Stripe session: {session.get('id')}\n"
+        f"Utlånare: {order.get('utlanare_namn')} – {order.get('utlanare_epost')}\n"
+        f"Låntagare: {order.get('lantagare_namn')} – {order.get('lantagare_epost')}\n"
+        f"Regnr: {order.get('bil_regnr')}\n"
+        f"Period: {order.get('from_dt')} -> {order.get('to_dt')}\n\n"
+        f"Newsletter opt-in: {order.get('marketing_accept')}\n\n"
+        f"IP: {order.get('ip')}\n"
+        f"UA: {order.get('ua')}\n"
+    )
+
+    oneflow_status = None
+    oneflow_err = None
+
+    cfg = get_oneflow_config()
+    if cfg:
         try:
-            order = parse_order_token(token)
-        except Exception:
-            return JSONResponse({"ok": True, "ignored": True})
-
-        # Skapa PDF
-        pdf_bytes = build_loan_pdf(order)
-        filename = f"laneavtal-bil-{order['agreement_id']}.pdf"
-        attach = pdf_to_attachment(filename, pdf_bytes)
-
-        # Maila PDF till båda
-        subj_user = "HP Juridik – Premium: Ditt låneavtal (PDF)"
-        text_user = (
-            "Hej!\n\n"
-            "Här kommer ditt låneavtal (PDF).\n"
-            "Premium: vi initierar även digital signering i nästa steg (om signeringstjänsten är aktiverad).\n\n"
-            "/HP Juridik\n"
-        )
-
-        # Lead-mail
-        subj_lead = "Lead: Låna bil till skuldsatt (Premium betalning)"
-        lead_body = (
-            "NY LEAD (PREMIUM)\n"
-            "=================\n\n"
-            f"Agreement ID: {order.get('agreement_id')}\n"
-            f"Stripe session: {session.get('id')}\n"
-            f"Utlånare: {order.get('utlanare_namn')} – {order.get('utlanare_epost')}\n"
-            f"Låntagare: {order.get('lantagare_namn')} – {order.get('lantagare_epost')}\n"
-            f"Regnr: {order.get('bil_regnr')}\n"
-            f"Period: {order.get('from_dt')} -> {order.get('to_dt')}\n\n"
-            f"Newsletter opt-in: {order.get('marketing_accept')}\n\n"
-            f"IP: {order.get('ip')}\n"
-            f"UA: {order.get('ua')}\n"
-        )
-
-        oneflow_status = None
-        oneflow_err = None
-
-        # Oneflow: optional
-        cfg = get_oneflow_config()
-        if cfg:
-            try:
-                variables = {
-                    "agreement_id": order.get("agreement_id"),
-                    "utlanare_namn": order.get("utlanare_namn"),
-                    "lantagare_namn": order.get("lantagare_namn"),
-                    "bil_regnr": order.get("bil_regnr"),
-                    "bil_marke_modell": order.get("bil_marke_modell"),
-                    "from_dt": order.get("from_dt"),
-                    "to_dt": order.get("to_dt"),
-                    "andamal": order.get("andamal"),
-                }
-                res = await oneflow_create_contract_from_template(
-                    cfg=cfg,
-                    agreement_id=order["agreement_id"],
-                    utlanare_email=order["utlanare_epost"],
-                    lantagare_email=order["lantagare_epost"],
-                    variables=variables,
-                )
-                oneflow_status = res.get("contract_id")
-            except Exception as e:
-                oneflow_err = str(e)
-
-        # Skicka mail – även om Oneflow failar
-        try:
-            await postmark_send(
-                to_email=order["utlanare_epost"],
-                subject=subj_user,
-                text_body=text_user,
-                attachments=[attach],
+            variables = {
+                "agreement_id": order.get("agreement_id"),
+                "utlanare_namn": order.get("utlanare_namn"),
+                "lantagare_namn": order.get("lantagare_namn"),
+                "bil_regnr": order.get("bil_regnr"),
+                "bil_marke_modell": order.get("bil_marke_modell"),
+                "from_dt": order.get("from_dt"),
+                "to_dt": order.get("to_dt"),
+                "andamal": order.get("andamal"),
+            }
+            res = await oneflow_create_contract_from_template(
+                cfg=cfg,
+                agreement_id=order["agreement_id"],
+                utlanare_email=order["utlanare_epost"],
+                lantagare_email=order["lantagare_epost"],
+                variables=variables,
             )
-            await postmark_send(
-                to_email=order["lantagare_epost"],
-                subject=subj_user,
-                text_body=text_user,
-                attachments=[attach],
-            )
-            # lead inbox
-            lead_plus = lead_body
-            if oneflow_status:
-                lead_plus += f"\nOneflow contract_id: {oneflow_status}\n"
-            if oneflow_err:
-                lead_plus += f"\nOneflow error: {oneflow_err}\n"
-
-            await postmark_send(
-                to_email=LEAD_INBOX,
-                subject=subj_lead,
-                text_body=lead_plus,
-                attachments=[attach],
-            )
+            oneflow_status = res.get("contract_id")
         except Exception as e:
-            # webhook ska ändå returnera 200 så Stripe inte retryar i onödan?
-            # Men här kan ni välja 500 om ni vill retrya. Vi kör 200 och loggar via response.
-            return JSONResponse({"ok": False, "mail_error": str(e), "oneflow": oneflow_status, "oneflow_err": oneflow_err})
+            oneflow_err = str(e)
 
-        return JSONResponse({"ok": True, "oneflow": oneflow_status, "oneflow_err": oneflow_err})
+    try:
+        await postmark_send(to_email=order["utlanare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
+        await postmark_send(to_email=order["lantagare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
 
-    return JSONResponse({"ok": True})
+        lead_plus = lead_body
+        if oneflow_status:
+            lead_plus += f"\nOneflow contract_id: {oneflow_status}\n"
+        if oneflow_err:
+            lead_plus += f"\nOneflow error: {oneflow_err}\n"
 
+        await postmark_send(to_email=LEAD_INBOX, subject=subj_lead, text_body=lead_plus, attachments=[attach])
+    except Exception as e:
+        return JSONResponse({"ok": False, "mail_error": str(e), "oneflow": oneflow_status, "oneflow_err": oneflow_err})
 
-# ------------------------------------------------------------------------------
-# Legacy/friendly routes (om ni länkar till /contact)
-# ------------------------------------------------------------------------------
+    return JSONResponse({"ok": True, "oneflow": oneflow_status, "oneflow_err": oneflow_err})
+
 
 @app.get("/contact", response_class=HTMLResponse)
 async def contact_alias_get(request: Request) -> HTMLResponse:
