@@ -1,6 +1,7 @@
 import os
 import io
 import uuid
+import json
 import base64
 import smtplib
 from datetime import datetime, timezone
@@ -37,9 +38,9 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 # ------------------------------------------------------------------------------
 BASE_URL = os.getenv("BASE_URL", "http://localhost:10000").rstrip("/")
 
-MAIL_FROM = os.getenv("MAIL_FROM", "lanabil@hpjuridik.se")
+MAIL_FROM = os.getenv("MAIL_FROM", "HP@hpjuridik.se")
 CONTACT_TO = os.getenv("CONTACT_TO", "hp@hpjuridik.se")
-CONTACT_FROM = os.getenv("CONTACT_FROM", MAIL_FROM)  # kan sättas till hp@ om ni vill
+CONTACT_FROM = os.getenv("CONTACT_FROM", MAIL_FROM)
 LEAD_INBOX = os.getenv("LEAD_INBOX", "lanabil@hpjuridik.se")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
@@ -57,6 +58,9 @@ if STRIPE_SECRET_KEY:
 CANONICAL_HOST = os.getenv("CANONICAL_HOST", "hpjuridik.se").strip().lower()
 SITE_URL = os.getenv("SITE_URL", f"https://{CANONICAL_HOST}").rstrip("/")
 
+# Filpersistens (MVP): funkar även om processen restartar / annan worker får webhooken
+AGREEMENTS_DIR = os.getenv("AGREEMENTS_DIR", "/tmp/hpj_agreements")
+
 COMPANY = {
     "brand": "HP Juridik",
     "signature_name": "HP",
@@ -68,12 +72,10 @@ COMPANY = {
     "orgnr": "559365-2018",
 }
 
-# ------------------------------------------------------------------------------
-# In-memory storage (MVP)
-# ------------------------------------------------------------------------------
-AGREEMENTS: Dict[str, Dict[str, Any]] = {}
 
-
+# ------------------------------------------------------------------------------
+# Small utils
+# ------------------------------------------------------------------------------
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -93,8 +95,44 @@ def page_ctx(request: Request, path: str, title: str, description: str) -> Dict[
     }
 
 
+def _ensure_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+
+def _agreement_path(agreement_id: str) -> str:
+    # Bara uuid i våra id:n -> säkert filnamn
+    return os.path.join(AGREEMENTS_DIR, f"{agreement_id}.json")
+
+
+def save_agreement(agreement: Dict[str, Any]) -> None:
+    _ensure_dir(AGREEMENTS_DIR)
+    agreement_id = agreement["agreement_id"]
+    with open(_agreement_path(agreement_id), "w", encoding="utf-8") as f:
+        json.dump(agreement, f, ensure_ascii=False)
+
+
+def load_agreement(agreement_id: str) -> Optional[Dict[str, Any]]:
+    path = _agreement_path(agreement_id)
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def mark_delivered(agreement_id: str, delivered: bool, is_paid: bool = False, stripe_session_id: Optional[str] = None) -> None:
+    ag = load_agreement(agreement_id)
+    if not ag:
+        return
+    ag["delivered"] = bool(delivered)
+    if is_paid:
+        ag["is_paid"] = True
+    if stripe_session_id:
+        ag["stripe_session_id"] = stripe_session_id
+    save_agreement(ag)
+
+
 # ------------------------------------------------------------------------------
-# Email (SMTP) helpers
+# Email (SMTP)
 # ------------------------------------------------------------------------------
 def _smtp_send(
     to_emails: List[str],
@@ -110,6 +148,9 @@ def _smtp_send(
     if not clean_to:
         raise RuntimeError("No recipients provided")
 
+    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
+        raise RuntimeError("SMTP settings missing (SMTP_HOST/SMTP_USER/SMTP_PASS)")
+
     msg = EmailMessage()
     msg["From"] = from_email or MAIL_FROM
     msg["To"] = ", ".join(clean_to)
@@ -120,9 +161,6 @@ def _smtp_send(
 
     if pdf_bytes:
         msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="avtal.pdf")
-
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError("SMTP settings missing (SMTP_HOST/SMTP_USER/SMTP_PASS)")
 
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.starttls()
@@ -149,10 +187,6 @@ def safe_send_email(
     reply_to: Optional[str] = None,
     from_email: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
-    """
-    Skicka mail men krascha inte caller (viktigt i webhook).
-    Returnerar (ok, error_message).
-    """
     try:
         send_email(to_emails, subject, text, pdf_bytes=pdf_bytes, reply_to=reply_to, from_email=from_email)
         return True, None
@@ -251,7 +285,6 @@ def build_loan_pdf(flat: Dict[str, Any]) -> bytes:
 def deliver_free(agreement_id: str, agreement: Dict[str, Any]) -> None:
     flat = agreement["flat"]
     pdf_bytes = base64.b64decode(agreement["pdf_b64"])
-
     lender_email = flat.get("utlanare_epost")
     borrower_email = flat.get("lantagare_epost")
 
@@ -266,41 +299,39 @@ def deliver_free(agreement_id: str, agreement: Dict[str, Any]) -> None:
         [LEAD_INBOX],
         "Lead: Låna bil till skuldsatt (FREE)",
         f"agreement_id: {agreement_id}\n\n{flat}",
-        pdf_bytes=None,
     )
 
     agreement["delivered"] = True
+    save_agreement(agreement)
 
 
-def deliver_premium(agreement_id: str, agreement: Dict[str, Any], stripe_session_id: Optional[str]) -> None:
+def deliver_premium_pdf(agreement_id: str, agreement: Dict[str, Any], stripe_session_id: Optional[str]) -> None:
     """
-    Premiumleverans i webhook (idempotent med agreement['delivered']).
-    Oneflow kommer senare – här levererar vi PDF och lead.
+    Premium: skicka 'signeringsdokument' (PDF) till båda parter.
+    (Oneflow/BankID-signering lägger vi senare.)
     """
     flat = agreement["flat"]
     pdf_bytes = base64.b64decode(agreement["pdf_b64"])
-
     lender_email = flat.get("utlanare_epost")
     borrower_email = flat.get("lantagare_epost")
 
-    # PDF till båda
     send_email(
         [lender_email, borrower_email],
-        "Premium – ert avtal (PDF)",
-        "Tack för er betalning. Här kommer ert avtal som PDF.\n\n/HP Juridik",
+        "Premium – signeringsdokument (PDF)",
+        "Tack för er betalning. Här kommer signeringsdokumentet som PDF.\n\n/HP Juridik",
         pdf_bytes=pdf_bytes,
     )
 
-    # Lead
     send_email(
         [LEAD_INBOX],
         "Lead: Låna bil till skuldsatt (PREMIUM)",
         f"agreement_id: {agreement_id}\nstripe_session_id: {stripe_session_id}\n\n{flat}",
-        pdf_bytes=None,
     )
 
     agreement["is_paid"] = True
     agreement["delivered"] = True
+    agreement["stripe_session_id"] = stripe_session_id
+    save_agreement(agreement)
 
 
 # ------------------------------------------------------------------------------
@@ -327,7 +358,6 @@ def contact_page(request: Request):
     return templates.TemplateResponse("pages/contact.html", ctx)
 
 
-# Alias om ni har frontend som postar till /contact ibland
 @app.post("/contact", response_class=HTMLResponse)
 def contact_submit_alias(
     request: Request,
@@ -349,7 +379,6 @@ def contact_submit(
     telefon: str = Form(""),
     meddelande: str = Form(""),
 ):
-    # Honeypot => tyst success
     if website.strip():
         ctx = page_ctx(request, "/", "HP Juridik", "HP Juridik – juridisk rådgivning.")
         ctx.update({"sent": True, "error": None, "free_ok": False, "premium_ok": False})
@@ -369,24 +398,14 @@ def contact_submit(
         "------------------------------\n"
         f"Tid (UTC): {utc_iso()}\n"
         f"IP: {request.client.host if request.client else ''}\n"
-        f"User-Agent: {request.headers.get('user-agent','')}\n\n"
-        "SIGNATUR\n"
-        "------------------------------\n"
-        f"{COMPANY['signature_name']} // {COMPANY['brand']}\n"
-        f"{COMPANY['phone']}\n"
-        f"{COMPANY['website']}\n"
-        f"{COMPANY['address']}\n"
-        f"{COMPANY['company']}\n"
-        f"{COMPANY['orgnr']}\n"
+        f"User-Agent: {request.headers.get('user-agent','')}\n"
     )
 
     try:
-        # To: hp@  | Reply-To: besökaren  | From: CONTACT_FROM (kan vara hp@ om ni vill)
         send_email(
             [CONTACT_TO],
             subject,
             body,
-            pdf_bytes=None,
             reply_to=epost or None,
             from_email=CONTACT_FROM,
         )
@@ -430,19 +449,14 @@ def lana_bil_submit(
     lantagare_epost: str = Form(...),
     fordon_modell: str = Form(...),
     fordon_regnr: str = Form(...),
-    from_dt: str = Form(...),  # datetime-local: 2026-03-04T09:13
+    from_dt: str = Form(...),
     to_dt: str = Form(...),
     andamal: str = Form(...),
     disclaimer_accept: Optional[str] = Form(None),
     newsletter_optin: Optional[str] = Form(None),
 ):
     if not disclaimer_accept:
-        ctx = page_ctx(
-            request,
-            "/lana-bil-till-skuldsatt",
-            "Låna bil till skuldsatt | HP Juridik",
-            "Skapa avtal och välj Gratis eller Premium.",
-        )
+        ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
         ctx.update({"error": "Du måste godkänna friskrivningen för att fortsätta.", "sent_ok": False, "sent_error": None})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
@@ -485,27 +499,15 @@ def lana_bil_submit(
     pdf_bytes = build_loan_pdf(flat)
 
     structured = {
-        "utlanare": {
-            "namn": utlanare_namn,
-            "pnr": utlanare_pnr,
-            "adress": utlanare_adress,
-            "tel": utlanare_tel,
-            "epost": utlanare_epost,
-        },
-        "lantagare": {
-            "namn": lantagare_namn,
-            "pnr": lantagare_pnr,
-            "adress": lantagare_adress,
-            "tel": lantagare_tel,
-            "epost": lantagare_epost,
-        },
+        "utlanare": {"namn": utlanare_namn, "pnr": utlanare_pnr, "adress": utlanare_adress, "tel": utlanare_tel, "epost": utlanare_epost},
+        "lantagare": {"namn": lantagare_namn, "pnr": lantagare_pnr, "adress": lantagare_adress, "tel": lantagare_tel, "epost": lantagare_epost},
         "fordon": {"modell": fordon_modell, "regnr": flat["fordon_regnr"]},
         "period": {"from_str": flat["from_str"], "to_str": flat["to_str"]},
         "andamal": andamal,
         "newsletter_optin": flat["newsletter_optin"],
     }
 
-    AGREEMENTS[agreement_id] = {
+    agreement = {
         "agreement_id": agreement_id,
         "created_utc": flat["created_utc"],
         "data": structured,
@@ -516,6 +518,8 @@ def lana_bil_submit(
         "delivered": False,
     }
 
+    save_agreement(agreement)
+
     request.session["agreement_id"] = agreement_id
     return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
@@ -523,16 +527,11 @@ def lana_bil_submit(
 @app.get("/lana-bil-till-skuldsatt/review", response_class=HTMLResponse)
 def lana_bil_review_get(request: Request):
     agreement_id = request.session.get("agreement_id")
-    if not agreement_id or agreement_id not in AGREEMENTS:
+    agreement = load_agreement(agreement_id) if agreement_id else None
+    if not agreement_id or not agreement:
         return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
 
-    agreement = AGREEMENTS[agreement_id]
-    ctx = page_ctx(
-        request,
-        "/lana-bil-till-skuldsatt/review",
-        "Granska uppgifter | HP Juridik",
-        "Granska uppgifter och välj Gratis eller Premium.",
-    )
+    ctx = page_ctx(request, "/lana-bil-till-skuldsatt/review", "Granska uppgifter | HP Juridik", "Granska uppgifter och välj Gratis eller Premium.")
     ctx.update({"agreement_id": agreement_id, "data": agreement["data"], "error": None})
     return templates.TemplateResponse("pages/lana_bil_review.html", ctx)
 
@@ -540,15 +539,15 @@ def lana_bil_review_get(request: Request):
 @app.post("/lana-bil-till-skuldsatt/review")
 def lana_bil_review_post(
     request: Request,
-    plan: str = Form(...),  # "free" | "premium"
+    plan: str = Form(...),  # free | premium
     confirm_correct: Optional[str] = Form(None),
     disclaimer_accept: Optional[str] = Form(None),
 ):
     agreement_id = request.session.get("agreement_id")
-    if not agreement_id or agreement_id not in AGREEMENTS:
+    agreement = load_agreement(agreement_id) if agreement_id else None
+    if not agreement_id or not agreement:
         return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
 
-    agreement = AGREEMENTS[agreement_id]
     if not (confirm_correct and disclaimer_accept):
         ctx = page_ctx(request, "/lana-bil-till-skuldsatt/review", "Granska uppgifter | HP Juridik", "Granska.")
         ctx.update({"agreement_id": agreement_id, "data": agreement["data"], "error": "Du måste kryssa i båda rutorna för att fortsätta."})
@@ -581,25 +580,29 @@ def lana_bil_review_post(
         )
 
         agreement["stripe_session_id"] = session.id
+        save_agreement(agreement)
+
         return RedirectResponse(url=session.url, status_code=303)
 
     raise HTTPException(status_code=400, detail="Invalid plan")
 
 
 # ------------------------------------------------------------------------------
-# Stripe Webhook (premium leverans här)
+# Stripe Webhook (premium leverans sker här)
 # ------------------------------------------------------------------------------
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
+    # Alltid logg så du ser i Render om Stripe når endpointen
+    print("=== STRIPE WEBHOOK HIT ===", utc_iso())
+
     if not STRIPE_WEBHOOK_SECRET:
-        # Stripe behöver få 500 här så ni ser det i dashboard (felkonfig)
         raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET saknas")
 
     payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")  # robust: Stripe skickar så
+    sig_header = request.headers.get("stripe-signature")
+    print("Has stripe-signature header:", bool(sig_header), "payload bytes:", len(payload))
 
     if not sig_header:
-        # Stripe kommer markera som fail (bra: ni ser felet)
         return PlainTextResponse("missing stripe-signature header", status_code=400)
 
     try:
@@ -609,12 +612,11 @@ async def stripe_webhook(request: Request):
             secret=STRIPE_WEBHOOK_SECRET,
         )
     except Exception as e:
-        # 400 => Stripe retry + synligt i dashboard
-        print("Stripe webhook verify failed:", str(e))
-        return PlainTextResponse("invalid signature", status_code=400)
+        print("Stripe verify failed:", repr(e))
+        return PlainTextResponse(f"invalid signature: {type(e).__name__}", status_code=400)
 
     event_type = event.get("type")
-    print("Stripe webhook received:", event_type)
+    print("Stripe event:", event_type)
 
     if event_type != "checkout.session.completed":
         return PlainTextResponse("ok", status_code=200)
@@ -624,49 +626,39 @@ async def stripe_webhook(request: Request):
     metadata = session_obj.get("metadata") or {}
     agreement_id = metadata.get("agreement_id")
 
-    print("Stripe session:", session_id, "agreement_id:", agreement_id)
+    print("checkout.session.completed session_id:", session_id, "agreement_id:", agreement_id)
 
-    # Fallback om in-memory tappat agreement (restart/annan worker)
-    if not agreement_id or agreement_id not in AGREEMENTS:
-        msg = (
-            "Stripe checkout.session.completed men agreement saknas i minnet.\n\n"
-            f"agreement_id: {agreement_id}\n"
-            f"session_id: {session_id}\n"
-            f"metadata: {metadata}\n\n"
-            "Åtgärd: kontrollera att agreement lagras persistent (Postgres) eller att webhook och app delar state."
-        )
-        print("WARNING:", msg)
-
-        ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: agreement saknas i minne", msg)
+    if not agreement_id:
+        ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: saknar agreement_id", f"session_id={session_id}\nmetadata={metadata}")
         if not ok:
             print("ALERT email failed:", err)
-
         return PlainTextResponse("ok", status_code=200)
 
-    agreement = AGREEMENTS[agreement_id]
+    agreement = load_agreement(agreement_id)
+    if not agreement:
+        msg = f"Stripe completed men agreement saknas.\nagreement_id={agreement_id}\nsession_id={session_id}\nmetadata={metadata}"
+        print("WARNING:", msg)
+        ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: agreement saknas (persistens)", msg)
+        if not ok:
+            print("ALERT email failed:", err)
+        return PlainTextResponse("ok", status_code=200)
 
     # Idempotens
     if agreement.get("delivered"):
         print("Already delivered:", agreement_id)
         return PlainTextResponse("ok", status_code=200)
 
-    # markera betald + leverera
-    agreement["stripe_session_id"] = agreement.get("stripe_session_id") or session_id
-
+    # Leverera "signeringsdokument" (PDF) till båda parter
     try:
-        deliver_premium(agreement_id, agreement, stripe_session_id=session_id)
-        print("Premium delivered:", agreement_id)
+        deliver_premium_pdf(agreement_id, agreement, stripe_session_id=session_id)
+        print("Premium delivered OK:", agreement_id)
     except Exception as e:
-        # Viktigt: svara 200 ändå? Nej – om ni vill att Stripe ska retry:a, returnera 500.
-        # Men: om felet är SMTP tillfälligt, retry är bra. Så vi returnerar 500 här.
-        err_txt = f"Premium delivery failed for agreement_id={agreement_id} session_id={session_id}: {e}"
+        err_txt = f"Premium delivery failed agreement_id={agreement_id} session_id={session_id}: {e}"
         print(err_txt)
-
-        # Försök varna lead inbox (om SMTP funkar)
         ok, err2 = safe_send_email([LEAD_INBOX], "SMTP/Delivery ERROR i Stripe webhook", err_txt)
         if not ok:
             print("Could not send error email:", err2)
-
+        # 500 => Stripe retry (bra om SMTP var tillfälligt nere)
         return PlainTextResponse("delivery error", status_code=500)
 
     return PlainTextResponse("ok", status_code=200)
