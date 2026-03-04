@@ -11,9 +11,22 @@
 
   <link rel="stylesheet" href="/static/style.css" />
 </head>
-<a href="tel:0763171284" class="sticky-call">
-  <img src="{{ url_for('static', path='head-phonecall.png') }}" alt="Ring">
-  <span>Ring nu – få en tydlig plan</span>
+<a href="tel:0763171284" class="sticky-call" aria-label="Ring HP Juridik">
+  <span class="sticky-ic">
+    <img src="{{ url_for('static', path='head-phonecall.png') }}" alt="">
+  </span>
+
+  <span class="sticky-text">
+    <span class="sticky-title">Ring nu</span>
+    <span class="sticky-sub">Få en tydlig plan på 2 min</span>
+  </span>
+
+  <span class="sticky-go" aria-hidden="true">
+    <!-- liten “smooth” pil -->
+    <svg viewBox="0 0 24 24" fill="none">
+      <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+  </span>
 </a>
 <body>
   <!-- HEADER: centrerad logga + en meny -->
