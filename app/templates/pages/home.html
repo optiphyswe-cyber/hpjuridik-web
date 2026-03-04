@@ -95,6 +95,18 @@
             </div>
           {% endif %}
 
+          {% if free_ok %}
+            <div class="success-box">
+              <strong>Klart!</strong> Gratis-valet är klart och PDF har skickats till båda parter.
+            </div>
+          {% endif %}
+
+          {% if premium_ok %}
+            <div class="success-box">
+              <strong>Tack!</strong> Betalningen är mottagen. Leverans sker via Stripe webhook.
+            </div>
+          {% endif %}
+
           {% if error %}
             <div class="error-box">
               <strong>Det gick inte att skicka just nu.</strong><br>
@@ -147,42 +159,8 @@
   </div>
 </section>
 
-
-<!-- Snabb process / Hur det går till -->
-<section id="hur-det-gar-till" class="section">
-  <div class="container">
-    <h2>Så löser vi det</h2>
-    <p class="muted" style="max-width: 70ch;">
-      Du ska känna att något händer direkt. Vi jobbar strukturerat och offensivt – med kontroll på risk, kostnad och tidslinje.
-    </p>
-
-    <div class="services-grid-new">
-      <div class="service-card">
-        <div class="service-icon">①</div>
-        <div>
-          <h3>Snabb bedömning</h3>
-          <p>Vi sorterar fakta, risk och målbild. Du får tydliga nästa steg.</p>
-        </div>
-      </div>
-
-      <div class="service-card">
-        <div class="service-icon">②</div>
-        <div>
-          <h3>Strategi & press</h3>
-          <p>Vi sätter linjen och driver: förhandling, krav, svaromål – rätt sak i rätt tid.</p>
-        </div>
-      </div>
-
-      <div class="service-card">
-        <div class="service-icon">③</div>
-        <div>
-          <h3>Resultat</h3>
-          <p>Målet är lösning med bästa möjliga position – förlikning eller process.</p>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
+<!-- Ni kan behålla resten av er home som den är -->
+{% endblock %}
 
 
 <section id="om-oss" class="section profile-section">
