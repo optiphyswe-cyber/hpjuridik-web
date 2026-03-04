@@ -1467,3 +1467,34 @@ html {
     50%{ box-shadow: 0 22px 48px rgba(0,0,0,0.24), 0 0 0 1px rgba(16,185,129,0.26) inset; }
   }
 }
+/* === FORCE HEADER STYLES (last wins) === */
+.header-stack{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:12px;
+  padding:14px 0;
+}
+
+.brand-center{
+  display:flex;
+  justify-content:center;
+  width:100%;
+}
+
+.logo-img{
+  height:70px;
+  width:auto;
+  display:block;
+}
+
+.nav.nav-center{
+  display:flex;
+  justify-content:center;
+  gap:18px;
+  flex-wrap:wrap;
+}
+
+@media (max-width:768px){
+  .logo-img{ height:50px; }
+}
