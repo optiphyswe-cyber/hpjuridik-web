@@ -592,7 +592,6 @@ def lana_bil_review_post(
 # ------------------------------------------------------------------------------
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
-    # Alltid logg så du ser i Render om Stripe når endpointen
     print("=== STRIPE WEBHOOK HIT ===", utc_iso())
 
     if not STRIPE_WEBHOOK_SECRET:
@@ -618,26 +617,56 @@ async def stripe_webhook(request: Request):
     event_type = event.get("type")
     print("Stripe event:", event_type)
 
-    if event_type != "checkout.session.completed":
+    # Acceptera både "completed" och async success (vissa betalningar blir inte 'paid' direkt)
+    if event_type not in (
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded",
+    ):
         return PlainTextResponse("ok", status_code=200)
 
     session_obj = event["data"]["object"]
     session_id = session_obj.get("id")
     metadata = session_obj.get("metadata") or {}
     agreement_id = metadata.get("agreement_id")
-    print("AGREEMENTS keys count:", len(AGREEMENTS))
+    payment_status = session_obj.get("payment_status")
+    status = session_obj.get("status")
 
-    print("checkout.session.completed session_id:", session_id, "agreement_id:", agreement_id)
+    print(
+        "checkout session:",
+        "session_id=", session_id,
+        "agreement_id=", agreement_id,
+        "status=", status,
+        "payment_status=", payment_status,
+    )
 
+    # Leverera inte förrän Stripe säger PAID (skydd mot att success-sida nås innan betalning är klar)
+    if payment_status != "paid":
+        print("Not paid yet -> no delivery. Waiting for async_payment_succeeded. payment_status=", payment_status)
+        return PlainTextResponse("ok", status_code=200)
+
+    # Fallback 1: metadata saknar agreement_id
     if not agreement_id:
-        ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: saknar agreement_id", f"session_id={session_id}\nmetadata={metadata}")
+        ok, err = safe_send_email(
+            [LEAD_INBOX],
+            "Stripe ALERT: saknar agreement_id",
+            f"session_id={session_id}\nstatus={status}\npayment_status={payment_status}\nmetadata={metadata}",
+        )
         if not ok:
             print("ALERT email failed:", err)
         return PlainTextResponse("ok", status_code=200)
 
     agreement = load_agreement(agreement_id)
+
+    # Fallback 2: agreement saknas på disk
     if not agreement:
-        msg = f"Stripe completed men agreement saknas.\nagreement_id={agreement_id}\nsession_id={session_id}\nmetadata={metadata}"
+        msg = (
+            "Stripe PAID men agreement saknas i persistens.\n\n"
+            f"agreement_id={agreement_id}\n"
+            f"session_id={session_id}\n"
+            f"status={status}\n"
+            f"payment_status={payment_status}\n"
+            f"metadata={metadata}\n"
+        )
         print("WARNING:", msg)
         ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: agreement saknas (persistens)", msg)
         if not ok:
@@ -649,7 +678,7 @@ async def stripe_webhook(request: Request):
         print("Already delivered:", agreement_id)
         return PlainTextResponse("ok", status_code=200)
 
-    # Leverera "signeringsdokument" (PDF) till båda parter
+    # Leverera PDF till båda parter
     try:
         deliver_premium_pdf(agreement_id, agreement, stripe_session_id=session_id)
         print("Premium delivered OK:", agreement_id)
@@ -663,7 +692,6 @@ async def stripe_webhook(request: Request):
         return PlainTextResponse("delivery error", status_code=500)
 
     return PlainTextResponse("ok", status_code=200)
-
 
 # ------------------------------------------------------------------------------
 # Checkout pages (leverans sker via webhook)
