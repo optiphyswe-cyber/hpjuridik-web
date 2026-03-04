@@ -347,7 +347,7 @@ def lana_bil_submit(
     if to_obj <= from_obj:
         ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
         ctx.update({"error": "Till (datum & tid) måste vara efter Från.", "sent_ok": False, "sent_error": None})
-        return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
+        return templates.TemplateResponse("pages/lana_bil.html", ctx)
 
     agreement_id = str(uuid.uuid4())
 
