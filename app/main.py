@@ -1,25 +1,20 @@
 import os
-import smtplib
 import io
+import uuid
+import base64
+import smtplib
 from datetime import datetime, timezone
-from email.mime.text import MIMEText
-from email.message import EmailMessage
-from email.utils import formataddr
-from typing import List
+from typing import Dict, Any, List, Optional
 
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import (
-    HTMLResponse,
-    PlainTextResponse,
-    StreamingResponse,
-    Response,
-)
+import stripe
+from fastapi import FastAPI, Request, Form, Header, HTTPException
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.responses import RedirectResponse
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.responses import RedirectResponse, Response
 
-# PDF (ReportLab)
+# ReportLab PDF
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -30,25 +25,40 @@ from reportlab.lib import colors
 # App + templates
 # -------------------------
 app = FastAPI()
-
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
 # -------------------------
-# Environment / settings
+# ENV / Settings
 # -------------------------
-# Viktigt: Canonical ska vara www-versionen (detta löser duplicate-problemet)
-CANONICAL_HOST = os.getenv("CANONICAL_HOST", "www.hpjuridik.se").strip().lower()
-SITE_URL = os.getenv("SITE_URL", f"https://{CANONICAL_HOST}").rstrip("/")
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000").rstrip("/")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-change-me")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
+
+POSTMARK_SERVER_TOKEN = os.getenv("POSTMARK_SERVER_TOKEN", "").strip()  # (valfritt)
+MAIL_FROM = os.getenv("MAIL_FROM", (SMTP_USER or "lanabil@hpjuridik.se"))
 CONTACT_TO = os.getenv("CONTACT_TO", "hp@hpjuridik.se")
+LEAD_INBOX = os.getenv("LEAD_INBOX", "lanabil@hpjuridik.se")
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
+PREMIUM_PRICE_ORE = int(os.getenv("PREMIUM_PRICE_ORE", "15000"))  # 15000 = 150 kr
+
+# Canonical host (valfritt, men ni hade detta innan)
+CANONICAL_HOST = os.getenv("CANONICAL_HOST", "www.hpjuridik.se").strip().lower()
+SITE_URL = os.getenv("SITE_URL", f"https://{CANONICAL_HOST}").rstrip("/")
+
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
+
+if STRIPE_SECRET_KEY:
+    stripe.api_key = STRIPE_SECRET_KEY
 
 # -------------------------
-# Company info (single source of truth)
+# Company info
 # -------------------------
 COMPANY = {
     "brand": "HP Juridik",
@@ -62,87 +72,188 @@ COMPANY = {
 }
 
 # -------------------------
-# Middleware: force https + force www (canonical host)
+# In-memory Agreement store (MVP)
 # -------------------------
-class CanonicalRedirectMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        # Render skickar ofta X-Forwarded-Proto
-        proto = (request.headers.get("x-forwarded-proto") or request.url.scheme).lower()
-        host = (request.headers.get("x-forwarded-host") or request.url.hostname or "").lower()
+AGREEMENTS: Dict[str, Dict[str, Any]] = {}
 
-        # Behåll path + query
-        path = request.url.path
-        query = request.url.query
-        suffix = f"?{query}" if query else ""
+def utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
-        # 1) Tvinga https
-        if proto != "https":
-            target = f"https://{host}{path}{suffix}"
-            return RedirectResponse(url=target, status_code=301)
-
-        # 2) Tvinga canonical host (www)
-        if host and host != CANONICAL_HOST:
-            target = f"https://{CANONICAL_HOST}{path}{suffix}"
-            return RedirectResponse(url=target, status_code=301)
-
-        return await call_next(request)
-
-app.add_middleware(CanonicalRedirectMiddleware)
-
-# -------------------------
-# SEO helpers
-# -------------------------
-def seo(path: str, title: str, description: str):
-    # Alltid canonical till www + korrekt path
-    canonical_url = f"{SITE_URL}{path}"
-    return {
-        "title": title,
-        "description": description,
-        "canonical": canonical_url,
-        "robots": "index, follow",
-    }
-
-
-def page_ctx(request: Request, path: str, title: str, desc: str):
+def page_ctx(request: Request, path: str, title: str, description: str):
+    canonical = f"{SITE_URL}{path if path.startswith('/') else '/' + path}"
     return {
         "request": request,
-        "seo": seo(path, title, desc),
         "company": COMPANY,
+        "seo": {
+            "title": title,
+            "description": description,
+            "canonical": canonical,
+            "robots": "index, follow",
+        },
+        "path": path,
     }
 
 # -------------------------
-# Email helpers
+# Email helpers (SMTP; Postmark kan kopplas in senare)
 # -------------------------
-def build_email_body(
-    namn: str,
-    epost: str,
-    telefon: str,
-    meddelande: str,
+def smtp_send(to_emails: List[str], subject: str, text: str, pdf_bytes: Optional[bytes] = None):
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"] = MAIL_FROM
+    msg["To"] = ", ".join([e for e in to_emails if e])
+    msg["Subject"] = subject
+    msg.set_content(text)
+
+    if pdf_bytes:
+        msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename="avtal.pdf")
+
+    if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
+        # Om SMTP inte är satt: faila tydligt
+        raise RuntimeError("SMTP settings missing (SMTP_HOST/SMTP_USER/SMTP_PASS).")
+
+    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.send_message(msg)
+
+def send_email(to_emails: List[str], subject: str, text: str, pdf_bytes: Optional[bytes] = None):
+    """
+    MVP: SMTP.
+    (Ni har POSTMARK_SERVER_TOKEN i env – men er nuvarande kod kör SMTP.
+     Vill ni byta till Postmark nu så säger du till, så ger jag Postmark-varianten.)
+    """
+    smtp_send(to_emails, subject, text, pdf_bytes)
+
+# -------------------------
+# PDF generator (ReportLab)
+# -------------------------
+def build_loan_pdf(data: Dict[str, Any]) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf,
+        pagesize=A4,
+        leftMargin=18 * mm,
+        rightMargin=18 * mm,
+        topMargin=18 * mm,
+        bottomMargin=18 * mm,
+    )
+    styles = getSampleStyleSheet()
+    h1 = ParagraphStyle("H1", parent=styles["Heading1"], fontSize=16, leading=20, spaceAfter=10)
+    p = ParagraphStyle("P", parent=styles["BodyText"], fontSize=10.5, leading=14)
+
+    story = []
+    story.append(Paragraph("Tillfälligt låneavtal – bil", h1))
+    story.append(Paragraph(f"Avtals-ID: {data.get('agreement_id','')}", p))
+    story.append(Paragraph(f"Skapat (UTC): {data.get('created_utc','')}", p))
+    story.append(Spacer(1, 8))
+
+    def row(label, value):
+        return [Paragraph(f"<b>{label}</b>", p), Paragraph(str(value or ""), p)]
+
+    table_data = [
+        row("Utlånare – namn", data.get("utlanare_namn")),
+        row("Utlånare – personnummer", data.get("utlanare_pnr")),
+        row("Utlånare – adress", data.get("utlanare_adress")),
+        row("Utlånare – telefon", data.get("utlanare_tel")),
+        row("Utlånare – e-post", data.get("utlanare_epost")),
+        row("Låntagare – namn", data.get("lantagare_namn")),
+        row("Låntagare – personnummer", data.get("lantagare_pnr")),
+        row("Låntagare – adress", data.get("lantagare_adress")),
+        row("Låntagare – telefon", data.get("lantagare_tel")),
+        row("Låntagare – e-post", data.get("lantagare_epost")),
+        row("Fordon – märke/modell", data.get("bil_marke_modell")),
+        row("Fordon – reg.nr", data.get("bil_regnr")),
+        row("Avtalsperiod – från", data.get("from_dt")),
+        row("Avtalsperiod – till", data.get("to_dt")),
+        row("Ändamål/syfte", data.get("andamal")),
+    ]
+
+    t = Table(table_data, colWidths=[55 * mm, 110 * mm])
+    t.setStyle(
+        TableStyle(
+            [
+                ("BOX", (0, 0), (-1, -1), 0.8, colors.black),
+                ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.grey),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+    story.append(t)
+    story.append(Spacer(1, 12))
+
+    story.append(Paragraph("<b>Friskrivning</b>", p))
+    story.append(
+        Paragraph(
+            "Detta dokument är ett standardiserat bevisunderlag baserat på angivna uppgifter. "
+            "HP Juridik lämnar ingen garanti för att avtalet godtas av Kronofogden, domstol eller annan part. "
+            "Myndighetsbedömningar sker alltid utifrån en helhetsprövning.",
+            p,
+        )
+    )
+    story.append(Spacer(1, 18))
+    story.append(Paragraph("Signaturer:", p))
+    story.append(Spacer(1, 24))
+    story.append(Paragraph("______________________________", p))
+    story.append(Paragraph("Utlånare", p))
+    story.append(Spacer(1, 18))
+    story.append(Paragraph("______________________________", p))
+    story.append(Paragraph("Låntagare", p))
+
+    doc.build(story)
+    return buf.getvalue()
+
+# -------------------------
+# Routes
+# -------------------------
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    ctx = page_ctx(request, "/", "HP Juridik | Juridisk rådgivning", "Personlig och trygg juridisk rådgivning.")
+    ctx.update({
+        "sent": request.query_params.get("sent") == "1",   # kontakt skickad
+        "free_ok": request.query_params.get("free") == "1",
+        "premium_ok": request.query_params.get("premium") == "1",
+        "error": None,
+    })
+    return templates.TemplateResponse("pages/home.html", ctx)
+
+@app.get("/kontakta-oss", response_class=HTMLResponse)
+def contact_page(request: Request):
+    ctx = page_ctx(request, "/kontakta-oss", "Kontakt | HP Juridik", "Kontakta HP Juridik.")
+    ctx.update({"sent": False, "error": None})
+    return templates.TemplateResponse("pages/contact.html", ctx)
+
+# Kontakt: ni vill stanna på home (ingen redirect till /kontakta-oss)
+@app.post("/kontakta-oss", response_class=HTMLResponse)
+def contact_submit(
     request: Request,
-) -> str:
-    ts = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
-    ip = request.client.host if request.client else "unknown"
-    ua = request.headers.get("user-agent", "unknown")
-
-    telefon_txt = telefon.strip() if telefon and telefon.strip() else "Ej angivet"
-
-    return (
-        "NY KONTAKTFÖRFRÅGAN (HPJURIDIK.SE)\n"
-        "====================================\n\n"
-        f"Namn: {namn}\n"
-        f"E-post: {epost}\n"
-        f"Telefon: {telefon_txt}\n\n"
-        "MEDDELANDE\n"
-        "------------------------------------\n"
-        f"{meddelande}\n\n"
-        "TEKNISK INFO\n"
-        "------------------------------------\n"
-        f"Tid: {ts}\n"
-        f"IP: {ip}\n"
-        f"User-Agent: {ua}\n\n"
-        "SIGNATUR\n"
-        "------------------------------------\n"
-        "Mvh // HP\n"
+    name: str = Form(""),
+    email: str = Form(""),
+    phone: str = Form(""),
+    message: str = Form(""),
+):
+    subject = "HP Juridik | Ny kontaktförfrågan från webb"
+    body = (
+        f"NY KONTAKTFÖRFRÅGAN (HPJURIDIK.SE)\n\n"
+        f"Namn: {name}\n"
+        f"E-post: {email}\n"
+        f"Telefon: {phone}\n\n"
+        f"MEDDELANDE\n"
+        f"------------------------------\n"
+        f"{message}\n\n"
+        f"Teknisk info\n"
+        f"------------------------------\n"
+        f"Tid (UTC): {utc_iso()}\n"
+        f"IP: {request.client.host if request.client else ''}\n"
+        f"User-Agent: {request.headers.get('user-agent','')}\n\n"
+        f"Signatur\n"
+        f"------------------------------\n"
+        f"{COMPANY['signature_name']} // {COMPANY['brand']}\n"
         f"{COMPANY['phone']}\n"
         f"{COMPANY['website']}\n"
         f"{COMPANY['address']}\n"
@@ -150,291 +261,17 @@ def build_email_body(
         f"{COMPANY['orgnr']}\n"
     )
 
-
-def send_contact_email(
-    namn: str,
-    epost: str,
-    telefon: str,
-    meddelande: str,
-    request: Request,
-) -> None:
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError(
-            "SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS i Render)."
-        )
-
-    subject = f"HP Juridik | Ny kontaktförfrågan från {namn}"
-    body = build_email_body(namn, epost, telefon, meddelande, request)
-
-    msg = MIMEText(body, "plain", "utf-8")
-    msg["Subject"] = subject
-    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))  # bör matcha SMTP_USER
-    msg["To"] = CONTACT_TO
-    msg["Reply-To"] = epost
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASS)
-        server.sendmail(SMTP_USER, [CONTACT_TO], msg.as_string())
-
-# -------------------------
-# PDF helpers (Låna bil)
-# -------------------------
-def send_agreement_email(
-    *,
-    to_emails: List[str],
-    subject: str,
-    body: str,
-    pdf_bytes: bytes,
-    filename: str = "laneavtal-bil.pdf",
-) -> None:
-    if not (SMTP_HOST and SMTP_USER and SMTP_PASS):
-        raise RuntimeError("SMTP är inte konfigurerat (saknar SMTP_HOST/SMTP_USER/SMTP_PASS).")
-
-    clean = [e.strip() for e in (to_emails or []) if e and e.strip()]
-    if not clean:
-        raise RuntimeError("Inga giltiga mottagaradresser angivna.")
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = formataddr((COMPANY["brand"], SMTP_USER))
-    msg["To"] = ", ".join(clean)
-    msg.set_content(body)
-
-    msg.add_attachment(pdf_bytes, maintype="application", subtype="pdf", filename=filename)
-
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.starttls()
-        smtp.login(SMTP_USER, SMTP_PASS)
-        smtp.send_message(msg)
-
-
-def _safe(s: str) -> str:
-    return (s or "").strip()
-
-
-def _sv_dt(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%d kl. %H:%M")
-
-
-def _sv_date(dt: datetime) -> str:
-    return dt.strftime("%Y-%m-%d")
-
-
-def build_loan_pdf(
-    *,
-    utlanare: dict,
-    lantagare: dict,
-    fordon: dict,
-    period: dict,
-    andamal: str,
-    ort: str = "Lund",
-) -> bytes:
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf,
-        pagesize=A4,
-        leftMargin=18 * mm,
-        rightMargin=18 * mm,
-        topMargin=16 * mm,
-        bottomMargin=16 * mm,
-        title="Tillfälligt låneavtal – bil",
-        author=COMPANY.get("brand", ""),
-    )
-
-    styles = getSampleStyleSheet()
-
-    title = ParagraphStyle("Title", parent=styles["Title"], fontSize=18, leading=22, spaceAfter=10)
-    h = ParagraphStyle("H", parent=styles["Heading2"], fontSize=12.5, leading=15, spaceBefore=10, spaceAfter=6)
-    body = ParagraphStyle("Body", parent=styles["BodyText"], fontSize=10.5, leading=14, spaceAfter=6)
-    small = ParagraphStyle("Small", parent=styles["BodyText"], fontSize=9.5, leading=12.5, spaceAfter=4)
-
-    def P(text: str, st=body):
-        text = _safe(text).replace("\n", "<br/>")
-        return Paragraph(text, st)
-
-    story = []
-    story.append(Paragraph("TILLFÄLLIGT LÅNEAVTAL – BIL", title))
-    story.append(P("Detta avtal upprättas för att tydliggöra villkoren för ett tidsbegränsat lån av fordon.", small))
-    story.append(Spacer(1, 6))
-
-    story.append(Paragraph("Parter", h))
-
-    ut_pnr = f", personnummer: {_safe(utlanare.get('pnr'))}" if _safe(utlanare.get("pnr")) else ""
-    la_pnr = f", personnummer: {_safe(lantagare.get('pnr'))}" if _safe(lantagare.get("pnr")) else ""
-
-    story.append(P(f"<b>Utlånare (ägare):</b> {_safe(utlanare.get('namn'))}{ut_pnr}", body))
-    story.append(P(f"Adress: {_safe(utlanare.get('adress'))}", body))
-    story.append(P(f"Telefon: {_safe(utlanare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(utlanare.get('epost'))}", body))
-    story.append(Spacer(1, 4))
-    story.append(P(f"<b>Låntagare (skuldsatt):</b> {_safe(lantagare.get('namn'))}{la_pnr}", body))
-    story.append(P(f"Adress: {_safe(lantagare.get('adress'))}", body))
-    story.append(P(f"Telefon: {_safe(lantagare.get('tel'))} &nbsp;&nbsp; E-post: {_safe(lantagare.get('epost'))}", body))
-
-    story.append(Paragraph("Fordon", h))
-    story.append(P(f"Märke och modell: {_safe(fordon.get('marke_modell'))}", body))
-    story.append(P(f"Registreringsnummer: {_safe(fordon.get('regnr'))}", body))
-    if _safe(fordon.get("agare")):
-        story.append(P(f"Ägare: {_safe(fordon.get('agare'))}", body))
-
-    story.append(Paragraph("Avtalsperiod", h))
-    from_dt = period["from"]
-    to_dt = period["to"]
-    story.append(P(f"Från: {_sv_dt(from_dt)}", body))
-    story.append(P(f"Till: {_sv_dt(to_dt)}", body))
-
-    story.append(Paragraph("Ändamål med lånet", h))
-    story.append(P(andamal, body))
-
-    story.append(Paragraph("Bakgrund och syfte med avtalet", h))
-    story.append(
-        P(
-            "Syftet med detta avtal är att dokumentera att utlåningen är tillfällig, att fordonet fortsatt tillhör utlånaren "
-            "och att låntagaren nyttjar fordonet inom ramen för nedanstående villkor. Avtalet kan användas som underlag "
-            "för att visa att fordonet inte överlåtits utan endast lånats ut under begränsad tid.",
-            body,
-        )
-    )
-    story.append(P("Detta avtal är ett standardiserat bevisunderlag baserat på parternas uppgifter.", small))
-
-    story.append(Paragraph("Villkor", h))
-    villkor = [
-        "Lånet avser endast ovan angivet fordon och gäller enbart under den angivna avtalsperioden.",
-        "Låntagaren ansvarar för att fordonet hanteras varsamt och enligt gällande trafik- och försäkringsvillkor.",
-        "Låntagaren ansvarar för kostnader som uppstår under låneperioden (bränsle, trängselskatt, parkeringsavgifter/böter m.m.) om inte annat avtalas skriftligen.",
-        "Skador eller fel som uppstår under låneperioden ska omedelbart meddelas utlånaren. Låntagaren ansvarar för skador som uppstår genom vårdslöshet eller felaktig användning.",
-        "Fordonet får inte överlåtas, lånas ut i andra hand, hyras ut eller användas för olagliga ändamål.",
-        "Utlånaren har rätt att återkalla lånet i förtid vid misstanke om missbruk eller vid väsentligt avtalsbrott.",
-    ]
-    for i, v in enumerate(villkor, start=1):
-        story.append(P(f"<b>{i}.</b> {v}", body))
-
-    story.append(Paragraph("Kopior", h))
-    story.append(P("Avtalet upprättas i två (2) likalydande exemplar där parterna erhåller varsitt.", body))
-
-    story.append(Spacer(1, 6))
-    today = datetime.now(timezone.utc).astimezone()
-    story.append(P(f"Ort: {_safe(ort)}", body))
-    story.append(P(f"Datum: {_sv_date(today)}", body))
-
-    story.append(Spacer(1, 14))
-    sig_data = [
-        ["______________________________", "______________________________"],
-        ["Utlånare (ägare)", "Låntagare (skuldsatt)"],
-        [f"Namn: {_safe(utlanare.get('namn'))}", f"Namn: {_safe(lantagare.get('namn'))}"],
-    ]
-    sig_table = Table(sig_data, colWidths=[85 * mm, 85 * mm])
-    sig_table.setStyle(
-        TableStyle(
-            [
-                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
-                ("FONTSIZE", (0, 0), (-1, -1), 10),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 2),
-                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                ("LINEBELOW", (0, 0), (0, 0), 0, colors.white),
-                ("LINEBELOW", (1, 0), (1, 0), 0, colors.white),
-            ]
-        )
-    )
-    story.append(sig_table)
-
-    doc.build(story)
-    return buf.getvalue()
-
-# -------------------------
-# SEO endpoints: robots + sitemap
-# -------------------------
-@app.get("/robots.txt", response_class=PlainTextResponse)
-def robots_txt():
-    # Tillåt indexering och peka ut sitemap
-    return f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}/sitemap.xml\n"
-
-
-@app.get("/sitemap.xml")
-def sitemap_xml():
-    # Lista viktiga sidor (lägg till fler vid behov)
-    urls = [
-        f"{SITE_URL}/",
-        f"{SITE_URL}/gdpr",
-        f"{SITE_URL}/allmanna-villkor",
-        f"{SITE_URL}/lana-bil-till-skuldsatt",
-    ]
-
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-    xml = ['<?xml version="1.0" encoding="UTF-8"?>',
-           '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">']
-    for u in urls:
-        xml.append("<url>")
-        xml.append(f"<loc>{u}</loc>")
-        xml.append(f"<lastmod>{now}</lastmod>")
-        xml.append("</url>")
-    xml.append("</urlset>")
-
-    return Response(content="\n".join(xml), media_type="application/xml")
-
-# -------------------------
-# Routes
-# -------------------------
-@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
-def home(request: Request):
-    ctx = page_ctx(
-        request,
-        "/",
-        "HP Juridik – 20 min gratis rådgivning",
-        "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
-    )
-    return templates.TemplateResponse("pages/home.html", ctx)
-
-
-@app.get("/gdpr", response_class=HTMLResponse)
-def gdpr(request: Request):
-    ctx = page_ctx(request, "/gdpr", "GDPR – HP Juridik", "Information om personuppgifter och integritet.")
-    return templates.TemplateResponse("pages/gdpr.html", ctx)
-
-
-@app.get("/allmanna-villkor", response_class=HTMLResponse)
-def terms(request: Request):
-    ctx = page_ctx(request, "/allmanna-villkor", "Allmänna villkor – HP Juridik", "Villkor för tjänster och rådgivning.")
-    return templates.TemplateResponse("pages/terms.html", ctx)
-
-
-@app.post("/kontakta-oss", response_class=HTMLResponse)
-def contact_submit(
-    request: Request,
-    namn: str = Form(...),
-    epost: str = Form(...),
-    meddelande: str = Form(...),
-    telefon: str = Form(""),
-    website: str = Form("", required=False),  # honeypot spam-skydd
-):
-    # Honeypot => låtsas OK utan att skicka
-    if website:
-        ctx = page_ctx(
-            request,
-            "/",
-            "HP Juridik – 20 min gratis rådgivning",
-            "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
-        )
-        ctx.update({"sent": True, "error": None})
-        return templates.TemplateResponse("pages/home.html", ctx)
-
-    error = None
     try:
-        send_contact_email(namn, epost, telefon, meddelande, request)
+        send_email([CONTACT_TO], subject, body, pdf_bytes=None)
     except Exception as e:
-        error = str(e)
+        ctx = page_ctx(request, "/", "HP Juridik | Juridisk rådgivning", "Personlig och trygg juridisk rådgivning.")
+        ctx.update({"sent": False, "error": f"Kunde inte skicka mail: {e}"})
+        return templates.TemplateResponse("pages/home.html", ctx, status_code=500)
 
-    ctx = page_ctx(
-        request,
-        "/",
-        "HP Juridik – 20 min gratis rådgivning",
-        "Personlig, trygg och värdeskapande juridik för privatpersoner och företag.",
-    )
-    ctx.update({"sent": error is None, "error": error})
+    # rendera home med tack-box (som du vill)
+    ctx = page_ctx(request, "/", "HP Juridik | Juridisk rådgivning", "Personlig och trygg juridisk rådgivning.")
+    ctx.update({"sent": True, "error": None})
     return templates.TemplateResponse("pages/home.html", ctx)
-
 
 @app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
 def lana_bil_form(request: Request):
@@ -442,11 +279,10 @@ def lana_bil_form(request: Request):
         request,
         "/lana-bil-till-skuldsatt",
         "Låna bil till skuldsatt | HP Juridik",
-        "Skapa ett tillfälligt låneavtal för bil som PDF.",
+        "Skapa avtal – granska, välj Gratis eller Premium.",
     )
-    ctx.update({"sent": False, "error": None})
+    ctx.update({"error": None})
     return templates.TemplateResponse("pages/lana_bil.html", ctx)
-
 
 @app.post("/lana-bil-till-skuldsatt")
 def lana_bil_submit(
@@ -463,78 +299,208 @@ def lana_bil_submit(
     lantagare_epost: str = Form(...),
     bil_marke_modell: str = Form(...),
     bil_regnr: str = Form(...),
-    from_dt: str = Form(...),
+    from_dt: str = Form(...),  # "YYYY-MM-DDTHH:MM" från datetime-local
     to_dt: str = Form(...),
     andamal: str = Form(...),
-    disclaimer_accept: str = Form(None),
+    disclaimer_accept: Optional[str] = Form(None),
 ):
     if not disclaimer_accept:
         ctx = page_ctx(
             request,
             "/lana-bil-till-skuldsatt",
             "Låna bil till skuldsatt | HP Juridik",
-            "Skapa ett tillfälligt låneavtal för bil som PDF.",
+            "Skapa avtal – granska, välj Gratis eller Premium.",
         )
-        ctx.update({"sent": False, "error": "Du måste godkänna friskrivningsvillkoret för att fortsätta."})
+        ctx.update({"error": "Du måste godkänna friskrivningen för att fortsätta."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
     bil_regnr_norm = "".join((bil_regnr or "").split()).upper()
 
     try:
-        from_dt_obj = datetime.fromisoformat(from_dt)
-        to_dt_obj = datetime.fromisoformat(to_dt)
+        # datetime-local ger "2026-03-04T09:13" (fromisoformat klarar det)
+        datetime.fromisoformat(from_dt)
+        datetime.fromisoformat(to_dt)
     except ValueError:
-        ctx = page_ctx(
-            request,
-            "/lana-bil-till-skuldsatt",
-            "Låna bil till skuldsatt | HP Juridik",
-            "Skapa ett tillfälligt låneavtal för bil som PDF.",
-        )
-        ctx.update({"sent": False, "error": "Ogiltigt datum/tid-format."})
+        ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
+        ctx.update({"error": "Ogiltigt datum/tid-format."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
-    if to_dt_obj <= from_dt_obj:
-        ctx = page_ctx(
-            request,
-            "/lana-bil-till-skuldsatt",
-            "Låna bil till skuldsatt | HP Juridik",
-            "Skapa ett tillfälligt låneavtal för bil som PDF.",
-        )
-        ctx.update({"sent": False, "error": "Till-datum/tid måste vara efter Från-datum/tid."})
+    if to_dt <= from_dt:
+        ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
+        ctx.update({"error": "Till-datum/tid måste vara efter Från-datum/tid."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
-    pdf_bytes = build_loan_pdf(
-        utlanare={
-            "namn": utlanare_namn,
-            "pnr": utlanare_pnr,
-            "adress": utlanare_adress,
-            "tel": utlanare_tel,
-            "epost": utlanare_epost,
-        },
-        lantagare={
-            "namn": lantagare_namn,
-            "pnr": lantagare_pnr,
-            "adress": lantagare_adress,
-            "tel": lantagare_tel,
-            "epost": lantagare_epost,
-        },
-        fordon={
-            "marke_modell": bil_marke_modell,
-            "regnr": bil_regnr_norm,
-            "agare": utlanare_namn,
-        },
-        period={"from": from_dt_obj, "to": to_dt_obj},
-        andamal=andamal,
-        ort="Lund",
-    )
+    agreement_id = str(uuid.uuid4())
+    data = {
+        "agreement_id": agreement_id,
+        "created_utc": utc_iso(),
+        "utlanare_namn": utlanare_namn,
+        "utlanare_pnr": utlanare_pnr,
+        "utlanare_adress": utlanare_adress,
+        "utlanare_tel": utlanare_tel,
+        "utlanare_epost": utlanare_epost,
+        "lantagare_namn": lantagare_namn,
+        "lantagare_pnr": lantagare_pnr,
+        "lantagare_adress": lantagare_adress,
+        "lantagare_tel": lantagare_tel,
+        "lantagare_epost": lantagare_epost,
+        "bil_marke_modell": bil_marke_modell,
+        "bil_regnr": bil_regnr_norm,
+        "from_dt": from_dt.replace("T", " "),
+        "to_dt": to_dt.replace("T", " "),
+        "andamal": andamal,
+    }
 
-    filename = "laneavtal-bil.pdf"
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    pdf_bytes = build_loan_pdf(data)
 
+    AGREEMENTS[agreement_id] = {
+        "agreement_id": agreement_id,
+        "created_utc": data["created_utc"],
+        "data": data,
+        "pdf_b64": base64.b64encode(pdf_bytes).decode("utf-8"),
+        "is_paid": False,
+        "stripe_session_id": None,
+        "delivered": False,
+    }
+
+    request.session["agreement_id"] = agreement_id
+    return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
+
+@app.get("/lana-bil-till-skuldsatt/review", response_class=HTMLResponse)
+def lana_bil_review_get(request: Request):
+    agreement_id = request.session.get("agreement_id")
+    if not agreement_id or agreement_id not in AGREEMENTS:
+        return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
+
+    agreement = AGREEMENTS[agreement_id]
+    ctx = page_ctx(
+        request,
+        "/lana-bil-till-skuldsatt/review",
+        "Granska uppgifter | Låna bil till skuldsatt",
+        "Granska och välj Gratis eller Premium.",
+    )
+    ctx.update({"agreement": agreement, "error": None})
+    return templates.TemplateResponse("pages/lana_bil_review.html", ctx)
+
+@app.post("/lana-bil-till-skuldsatt/review")
+def lana_bil_review_post(request: Request, plan: str = Form(...)):
+    agreement_id = request.session.get("agreement_id")
+    if not agreement_id or agreement_id not in AGREEMENTS:
+        return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
+
+    agreement = AGREEMENTS[agreement_id]
+    data = agreement["data"]
+    pdf_bytes = base64.b64decode(agreement["pdf_b64"])
+
+    lender_email = data.get("utlanare_epost")
+    borrower_email = data.get("lantagare_epost")
+
+    if plan == "free":
+        # Kund-PDF -> båda
+        send_email(
+            [lender_email, borrower_email],
+            "Tillfälligt låneavtal – bil (PDF)",
+            "Här kommer ert avtal som PDF. /HP Juridik",
+            pdf_bytes=pdf_bytes,
+        )
+
+        # Lead -> lanabil@
+        send_email(
+            [LEAD_INBOX],
+            "Lead: Låna bil till skuldsatt (FREE)",
+            f"agreement_id: {agreement_id}\n\n{data}",
+            pdf_bytes=None,
+        )
+
+        agreement["delivered"] = True
+        return RedirectResponse(url="/?free=1", status_code=303)
+
+    if plan == "premium":
+        if not STRIPE_SECRET_KEY:
+            raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY saknas.")
+
+        session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "sek",
+                        "product_data": {"name": "Premium – Låna bil till skuldsatt"},
+                        "unit_amount": PREMIUM_PRICE_ORE,
+                    },
+                    "quantity": 1,
+                }
+            ],
+            metadata={"agreement_id": agreement_id},
+            success_url=f"{BASE_URL}/checkout-success?agreement_id={agreement_id}",
+            cancel_url=f"{BASE_URL}/checkout-cancel?agreement_id={agreement_id}",
+        )
+
+        agreement["stripe_session_id"] = session.id
+        return RedirectResponse(url=session.url, status_code=303)
+
+    raise HTTPException(status_code=400, detail="Invalid plan")
+
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET saknas.")
+
+    payload = await request.body()
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload, sig_header=stripe_signature, secret=STRIPE_WEBHOOK_SECRET
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Webhook error: {e}")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        agreement_id = (session.get("metadata") or {}).get("agreement_id")
+
+        if agreement_id and agreement_id in AGREEMENTS:
+            agreement = AGREEMENTS[agreement_id]
+            if not agreement.get("delivered"):
+                agreement["is_paid"] = True
+
+                data = agreement["data"]
+                pdf_bytes = base64.b64decode(agreement["pdf_b64"])
+                lender_email = data.get("utlanare_epost")
+                borrower_email = data.get("lantagare_epost")
+
+                # Kund-PDF -> båda
+                send_email(
+                    [lender_email, borrower_email],
+                    "Premium – ert avtal (PDF)",
+                    "Tack för er betalning. Här kommer ert avtal som PDF. /HP Juridik",
+                    pdf_bytes=pdf_bytes,
+                )
+
+                # Lead -> lanabil@
+                send_email(
+                    [LEAD_INBOX],
+                    "Lead: Låna bil till skuldsatt (PREMIUM)",
+                    f"agreement_id: {agreement_id}\n\n{data}\n\nstripe_session_id: {agreement.get('stripe_session_id')}",
+                    pdf_bytes=None,
+                )
+
+                agreement["delivered"] = True
+
+    return PlainTextResponse("ok")
+
+@app.get("/checkout-success", response_class=HTMLResponse)
+def checkout_success(request: Request):
+    ctx = page_ctx(request, "/checkout-success", "Tack | HP Juridik", "Tack för din betalning.")
+    ctx.update({"agreement_id": request.query_params.get("agreement_id")})
+    return templates.TemplateResponse("pages/checkout_success.html", ctx)
+
+@app.get("/checkout-cancel", response_class=HTMLResponse)
+def checkout_cancel(request: Request):
+    ctx = page_ctx(request, "/checkout-cancel", "Avbrutet | HP Juridik", "Betalningen avbröts.")
+    ctx.update({"agreement_id": request.query_params.get("agreement_id")})
+    return templates.TemplateResponse("pages/checkout_cancel.html", ctx)
 
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
