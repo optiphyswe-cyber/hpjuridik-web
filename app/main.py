@@ -504,15 +504,25 @@ def lana_bil_review_post(
 
 
 @app.post("/stripe/webhook")
-async def stripe_webhook(request: Request, stripe_signature: str = Header(None)):
+async def stripe_webhook(
+    request: Request,
+    stripe_signature: str = Header(None, alias="Stripe-Signature"),
+):
     if not STRIPE_WEBHOOK_SECRET:
         raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET saknas")
 
     payload = await request.body()
+
     try:
-        event = stripe.Webhook.construct_event(payload, stripe_signature, STRIPE_WEBHOOK_SECRET)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Webhook error: {e}")
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=stripe_signature,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Invalid Stripe signature")
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
@@ -520,14 +530,16 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
 
         if agreement_id and agreement_id in AGREEMENTS:
             agreement = AGREEMENTS[agreement_id]
+
+            # Idempotens: kör bara en gång
             if not agreement.get("delivered"):
                 agreement["is_paid"] = True
 
                 flat = agreement["flat"]
                 pdf_bytes = base64.b64decode(agreement["pdf_b64"])
 
-                lender_email = flat["utlanare_epost"]
-                borrower_email = flat["lantagare_epost"]
+                lender_email = flat.get("utlanare_epost")
+                borrower_email = flat.get("lantagare_epost")
 
                 # PDF till båda
                 send_email(
@@ -547,8 +559,7 @@ async def stripe_webhook(request: Request, stripe_signature: str = Header(None))
 
                 agreement["delivered"] = True
 
-    return PlainTextResponse("ok")
-
+    return PlainTextResponse("ok", status_code=200)
 
 @app.get("/checkout-success", response_class=HTMLResponse)
 def checkout_success(request: Request):
