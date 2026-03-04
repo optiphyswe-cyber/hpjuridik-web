@@ -1,95 +1,38 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="sv">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
 
-  <!-- TITLE -->
-  <title>
-    {% if seo and seo.title %}
-      {{ seo.title }}
-    {% else %}
-      HP Juridik | Juridisk rådgivning i Lund & Skåne
-    {% endif %}
-  </title>
-
-  <!-- DESCRIPTION -->
-  <meta name="description"
-        content="{% if seo and seo.description %}{{ seo.description }}{% else %}Personlig och trygg juridisk rådgivning i Lund och Skåne. 20 min gratis första bedömning.{% endif %}" />
-
-  <!-- CANONICAL (FIXAR DUPLICATE-PROBLEMET) -->
-  <link rel="canonical"
-        href="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://www.hpjuridik.se/{% endif %}" />
-
-  <!-- ROBOTS -->
-  <meta name="robots"
-        content="{% if seo and seo.robots %}{{ seo.robots }}{% else %}index, follow{% endif %}" />
-
-  <!-- Open Graph -->
-  <meta property="og:title"
-        content="{% if seo and seo.title %}{{ seo.title }}{% else %}HP Juridik | Juridisk rådgivning i Lund & Skåne{% endif %}" />
-  <meta property="og:description"
-        content="{% if seo and seo.description %}{{ seo.description }}{% else %}Personlig och trygg juridisk rådgivning i Lund och Skåne.{% endif %}" />
-  <meta property="og:url"
-        content="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://www.hpjuridik.se/{% endif %}" />
-  <meta property="og:type" content="website" />
-
+  <title>{% if seo and seo.title %}{{ seo.title }}{% else %}HP Juridik{% endif %}</title>
+  <meta name="description" content="{% if seo and seo.description %}{{ seo.description }}{% else %}HP Juridik{% endif %}">
+  <link rel="canonical" href="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://www.hpjuridik.se/{% endif %}">
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 
 <body>
-  {% include "partials/header.html" %}
+  <header style="padding:12px 18px; border-bottom:1px solid #e7e7e7;">
+    <nav style="display:flex; gap:14px; justify-content:flex-end; align-items:center;">
+      <a href="/">Hem</a>
+      <a href="/kontakta-oss">Kontakt</a>
+      <a href="/lana-bil-till-skuldsatt">Låna bil</a>
+    </nav>
+  </header>
 
-  <!-- LOGGA under menyn (centrerad) -->
-  <div class="logo-banner">
-    <img src="/static/hp-juridik-logo.png" alt="HP Juridik" class="main-logo" loading="eager">
+  <div style="text-align:center; padding:16px 0 0;">
+    <img src="/static/hp-juridik-logo.png" alt="HP Juridik" style="max-width:160px;">
   </div>
 
-  <main>
+  <main style="max-width:920px; margin:0 auto; padding:18px;">
     {% block content %}{% endblock %}
   </main>
 
-  {% include "partials/footer.html" %}
-
-  <!-- Cookie banner -->
-  <div id="cookieBanner" class="cookie-banner" role="dialog" aria-live="polite" aria-label="Cookie-meddelande">
-    <div class="cookie-card">
-      <div class="cookie-text">
-        <div class="cookie-title">Cookies</div>
-        <p class="cookie-muted">
-          Vi använder nödvändiga cookies för att webbplatsen ska fungera. Med ditt samtycke kan vi även använda cookies för statistik.
-          Läs mer i vår <a href="/gdpr">integritetspolicy</a>.
-        </p>
-      </div>
-
-      <div class="cookie-actions">
-        <button type="button" class="cookie-btn cookie-btn-ghost" id="cookieDecline">Avböj</button>
-        <button type="button" class="cookie-btn cookie-btn-primary" id="cookieAccept">Acceptera</button>
-      </div>
+  <footer style="padding:18px; border-top:1px solid #e7e7e7; font-size:14px;">
+    <div style="max-width:920px; margin:0 auto;">
+      <div><b>{{ company.brand }}</b></div>
+      <div>{{ company.address }}</div>
+      <div>{{ company.company }} · {{ company.orgnr }}</div>
     </div>
-  </div>
-
-  <!-- Cookie JS -->
-  <script>
-  (function () {
-    const KEY = "hp_cookie_consent_v1"; // accepted | declined
-    const banner = document.getElementById("cookieBanner");
-    const acceptBtn = document.getElementById("cookieAccept");
-    const declineBtn = document.getElementById("cookieDecline");
-
-    if (!banner || !acceptBtn || !declineBtn) return;
-
-    const saved = localStorage.getItem(KEY);
-    if (!saved) banner.classList.add("is-visible");
-
-    function setConsent(value) {
-      localStorage.setItem(KEY, value);
-      banner.classList.remove("is-visible");
-    }
-
-    acceptBtn.addEventListener("click", function () { setConsent("accepted"); });
-    declineBtn.addEventListener("click", function () { setConsent("declined"); });
-  })();
-  </script>
+  </footer>
 </body>
 </html>
