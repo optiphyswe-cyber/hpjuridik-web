@@ -1315,3 +1315,8 @@ html {
 .info-box ul {
   margin-left: 20px;
 }
+.logo-img {
+  height: 28px;
+  width: auto;
+  display: block;
+}
