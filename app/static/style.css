@@ -1316,7 +1316,7 @@ html {
   margin-left: 20px;
 }
 .logo-img {
-  height: 28px;
+  height: 70px;
   width: auto;
   display: block;
 }
@@ -1335,7 +1335,7 @@ html {
 }
 
 .logo-img{
-  height:70px; /* justera 28-40px om du vill */
+  height:70px; /* justera 28-70px om du vill */
   width:auto;
   display:block;
 }
