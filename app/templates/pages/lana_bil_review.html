@@ -77,14 +77,14 @@
 
         <div class="muted" style="display:grid; gap:10px;">
           <label style="display:flex; gap:10px; align-items:flex-start;">
-            <input type="checkbox" name="confirm_correct" required style="margin-top:4px;">
+            <input type="checkbox" name="confirm_correct" required style="margin-top:4px;" form="reviewForm">
             <span>
               Jag har kontrollerat att uppgifterna är korrekta.
             </span>
           </label>
 
           <label style="display:flex; gap:10px; align-items:flex-start;">
-            <input type="checkbox" name="disclaimer_accept" required style="margin-top:4px;">
+            <input type="checkbox" name="disclaimer_accept" required style="margin-top:4px;" form="reviewForm">
             <span>
               Jag bekräftar att detta avtal är ett standardiserat bevisunderlag baserat på mina egna uppgifter.
               Jag är medveten om att HP Juridik inte lämnar någon garanti för att avtalet godtas av Kronofogden,
@@ -103,36 +103,25 @@
         </div>
       </div>
 
-      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:18px;">
-        <!-- GRATIS -->
-        <form method="post" action="/lana-bil-till-skuldsatt/free" style="margin:0;">
-          <input type="hidden" name="agreement_id" value="{{ agreement_id }}">
-          <input type="hidden" name="confirm_correct" value="1">
-          <input type="hidden" name="disclaimer_accept" value="1">
-          <button type="submit" class="btn-primary">
-            Gratis – Ladda ner PDF
+      <form id="reviewForm" method="post" action="/lana-bil-till-skuldsatt/review" style="margin-top:18px;">
+        <div style="display:flex; gap:12px; flex-wrap:wrap;">
+          <button type="submit" class="btn-primary" name="plan" value="free">
+            Gratis – Ladda ner / skicka PDF
           </button>
-        </form>
 
-        <!-- PREMIUM -->
-        <form method="post" action="/lana-bil-till-skuldsatt/paid" style="margin:0;">
-          <input type="hidden" name="agreement_id" value="{{ agreement_id }}">
-          <input type="hidden" name="confirm_correct" value="1">
-          <input type="hidden" name="disclaimer_accept" value="1">
-          <button type="submit" class="btn-primary" style="background:#111;">
+          <button type="submit" class="btn-primary" name="plan" value="premium" style="background:#111;">
             Premium – Betala 150 kr
           </button>
-        </form>
 
-        <a href="/lana-bil-till-skuldsatt" class="muted" style="align-self:center; text-decoration:underline;">
-          Gå tillbaka och ändra
-        </a>
-      </div>
+          <a href="/lana-bil-till-skuldsatt" class="muted" style="align-self:center; text-decoration:underline;">
+            Gå tillbaka och ändra
+          </a>
+        </div>
+      </form>
 
       <p class="muted" style="margin-top:14px;">
-        <strong>Premium:</strong> Efter betalning skickas signeringslänk (BankID) i nästa steg när signeringstjänst är aktiverad.
+        <strong>Premium:</strong> Leverans sker efter betalning via Stripe webhook. Oneflow kopplas in i nästa steg.
       </p>
-
     </div>
 
   </div>
