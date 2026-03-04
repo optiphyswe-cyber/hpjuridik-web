@@ -42,19 +42,6 @@
       </p>
     </div>
 
-    {% if sent_ok %}
-      <div class="success-box">
-        <strong>Klart!</strong> Ditt meddelande är skickat.
-      </div>
-    {% endif %}
-
-    {% if sent_error %}
-      <div class="error-box">
-        <strong>Något gick fel.</strong>
-        <div class="error-detail">{{ sent_error }}</div>
-      </div>
-    {% endif %}
-
     {% if error %}
       <div class="error-box">
         <strong>Något gick fel.</strong>
@@ -63,7 +50,7 @@
     {% endif %}
 
     <div class="form-card" style="max-width: 900px; margin: 0 auto;">
-      <form method="post" action="/lana-bil-till-skuldsatt/review" class="nice-form">
+      <form method="post" action="/lana-bil-till-skuldsatt" class="nice-form">
 
         <h2 style="margin-top:0;">Utlånare (ägare)</h2>
 
