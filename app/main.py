@@ -590,6 +590,7 @@ def lana_bil_review_post(
 # ------------------------------------------------------------------------------
 # Stripe Webhook (premium leverans sker här)
 # ------------------------------------------------------------------------------
+@app.post("/stripe/webhook")
 @app.post("/stripe/webhook/")
 async def stripe_webhook(request: Request):
     print("=== STRIPE WEBHOOK HIT ===", utc_iso())
