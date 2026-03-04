@@ -1,8 +1,9 @@
+# app/main.py
 from __future__ import annotations
 
 import base64
-import io
 import json
+import logging
 import os
 import uuid
 from dataclasses import dataclass
@@ -11,347 +12,241 @@ from typing import Any, Dict, Optional
 
 import httpx
 import stripe
-from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi import FastAPI, Form, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from jinja2 import Environment
+from starlette.middleware.sessions import SessionMiddleware
 from starlette.templating import Jinja2Templates
 
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.pdfgen import canvas
+# =========================
+# Logging
+# =========================
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("hpjuridik")
 
-
-app = FastAPI()
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-STATIC_DIR = os.path.join(BASE_DIR, "static")
-
-templates = Jinja2Templates(directory=TEMPLATES_DIR)
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-
-
-def env(name: str, default: Optional[str] = None) -> Optional[str]:
-    v = os.getenv(name)
-    if not v:
-        return default
+# =========================
+# Config
+# =========================
+def env(name: str, default: Optional[str] = None) -> str:
+    v = os.getenv(name, default)
+    if v is None:
+        raise RuntimeError(f"Missing required env var: {name}")
     return v
 
-
 BASE_URL = env("BASE_URL", "https://hpjuridik.se").rstrip("/")
+POSTMARK_SERVER_TOKEN = env("POSTMARK_SERVER_TOKEN", "")
 MAIL_FROM = env("MAIL_FROM", "lanabil@hpjuridik.se")
+
+# Kontaktformulär ska INTE till lanabil, utan till hp@
 CONTACT_TO = env("CONTACT_TO", "hp@hpjuridik.se")
+
+# Lead-inbox för låna-bil-flödet (gratis/premium)
 LEAD_INBOX = env("LEAD_INBOX", "lanabil@hpjuridik.se")
 
-POSTMARK_SERVER_TOKEN = env("POSTMARK_SERVER_TOKEN")
+# Stripe
+STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", "")
 
-STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY")
-STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET")
+# Pris i öre (SEK)
+PREMIUM_PRICE_ORE = int(env("PREMIUM_PRICE_ORE", "15000"))  # 150 kr default
+CURRENCY = env("CURRENCY", "sek")
 
-ONEFLOW_API_TOKEN = env("ONEFLOW_API_TOKEN")
-ONEFLOW_BASE_URL = env("ONEFLOW_BASE_URL", "https://api.oneflow.com")
-ONEFLOW_WORKSPACE_ID = env("ONEFLOW_WORKSPACE_ID")
-ONEFLOW_TEMPLATE_ID = env("ONEFLOW_TEMPLATE_ID")
+# Sessions
+SESSION_SECRET = env("SESSION_SECRET", "change-me-in-render")
 
-if STRIPE_SECRET_KEY:
-    stripe.api_key = STRIPE_SECRET_KEY
+stripe.api_key = STRIPE_SECRET_KEY
+
+# =========================
+# App
+# =========================
+app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET, same_site="lax", https_only=True)
+
+# Static/templates
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
 
 
-def now_utc() -> datetime:
-    return datetime.now(timezone.utc)
+# =========================
+# In-memory storage (enkel & stabil)
+# - Byt till DB senare om du vill
+# =========================
+@dataclass
+class Agreement:
+    agreement_id: str
+    created_utc: str
+    data: Dict[str, Any]
+    pdf_b64: str  # PDF bytes base64
+    is_paid: bool = False
+    stripe_session_id: Optional[str] = None
+
+AGREEMENTS: Dict[str, Agreement] = {}
 
 
-def iso_dt(dt: datetime) -> str:
-    return dt.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+# =========================
+# Helpers
+# =========================
+def now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
+def client_ip(request: Request) -> str:
+    # Render/reverse proxy: X-Forwarded-For kan finnas
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
 
-def page_ctx(request: Request, path: str, title: str, meta_desc: str = "") -> Dict[str, Any]:
-    return {
-        "request": request,
-        "path": path,
-        "title": title,
-        "meta_desc": meta_desc,
-        "base_url": BASE_URL,
-        "year": datetime.now().year,
-    }
-
+def user_agent(request: Request) -> str:
+    return request.headers.get("user-agent", "unknown")
 
 async def postmark_send(
     *,
-    to_email: str,
+    to: str,
     subject: str,
     text_body: str,
     from_email: Optional[str] = None,
     reply_to: Optional[str] = None,
-    attachments: Optional[list] = None,
+    attachments: Optional[list[dict]] = None,
 ) -> None:
     if not POSTMARK_SERVER_TOKEN:
-        raise RuntimeError("POSTMARK_SERVER_TOKEN saknas i environment")
+        raise RuntimeError("POSTMARK_SERVER_TOKEN is not set")
 
-    payload = {
+    payload: Dict[str, Any] = {
         "From": from_email or MAIL_FROM,
-        "To": to_email,
+        "To": to,
         "Subject": subject,
         "TextBody": text_body,
+        "MessageStream": "outbound",
     }
     if reply_to:
         payload["ReplyTo"] = reply_to
     if attachments:
         payload["Attachments"] = attachments
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=20) as client:
         r = await client.post(
             "https://api.postmarkapp.com/email",
             headers={
-                "Accept": "application/json",
-                "Content-Type": "application/json",
                 "X-Postmark-Server-Token": POSTMARK_SERVER_TOKEN,
+                "Content-Type": "application/json",
             },
-            json=payload,
+            content=json.dumps(payload),
         )
         if r.status_code >= 300:
             raise RuntimeError(f"Postmark error {r.status_code}: {r.text}")
 
+def make_pdf_bytes(agreement: Agreement) -> bytes:
+    # Minimal men stabil PDF. Du kan fylla på med mer text/klasuler senare.
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
 
-def pdf_to_attachment(filename: str, pdf_bytes: bytes) -> Dict[str, Any]:
+    buf = bytearray()
+    # reportlab vill ha file-like; vi använder BytesIO
+    from io import BytesIO
+    bio = BytesIO()
+    c = canvas.Canvas(bio, pagesize=A4)
+
+    w, h = A4
+    y = h - 60
+
+    def line(txt: str, dy: int = 16):
+        nonlocal y
+        c.drawString(50, y, txt)
+        y -= dy
+
+    d = agreement.data
+    line("HP Juridik - Tillfälligt låneavtal (bil)")
+    line(f"Avtals-ID: {agreement.agreement_id}")
+    line(f"Skapat (UTC): {agreement.created_utc}")
+    line("")
+
+    line("Utlånare (ägare):")
+    line(f"  Namn: {d.get('utlanare_namn','')}")
+    line(f"  Personnummer: {d.get('utlanare_pnr','')}")
+    line(f"  Adress: {d.get('utlanare_adress','')}")
+    line(f"  Telefon: {d.get('utlanare_tel','')}")
+    line(f"  E-post: {d.get('utlanare_epost','')}")
+    line("")
+
+    line("Låntagare (skuldsatt):")
+    line(f"  Namn: {d.get('lantagare_namn','')}")
+    line(f"  Personnummer: {d.get('lantagare_pnr','')}")
+    line(f"  Adress: {d.get('lantagare_adress','')}")
+    line(f"  Telefon: {d.get('lantagare_tel','')}")
+    line(f"  E-post: {d.get('lantagare_epost','')}")
+    line("")
+
+    line("Fordon:")
+    line(f"  Märke/modell: {d.get('bil_marke_modell','')}")
+    line(f"  Regnr: {d.get('bil_regnr','')}")
+    line("")
+
+    line("Avtalsperiod:")
+    line(f"  Från: {d.get('from_dt','')}")
+    line(f"  Till: {d.get('to_dt','')}")
+    line("")
+
+    line("Ändamål / syfte:")
+    # enkel radbrytning
+    andamal = (d.get("andamal") or "").strip()
+    for chunk in [andamal[i:i+95] for i in range(0, len(andamal), 95)] or [""]:
+        line(f"  {chunk}")
+    line("")
+
+    line("Standardiserad bekräftelse:")
+    line("  Avtalet bygger på användarens uppgifter och är ett bevisunderlag.")
+    line("  Ingen garanti lämnas för myndighetsbedömning.")
+    line("")
+
+    c.showPage()
+    c.save()
+    return bio.getvalue()
+
+def pdf_attachment(filename: str, pdf_bytes: bytes) -> dict:
     return {
         "Name": filename,
         "Content": base64.b64encode(pdf_bytes).decode("utf-8"),
         "ContentType": "application/pdf",
     }
 
-
-def build_loan_pdf(data: Dict[str, Any]) -> bytes:
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=A4)
-    w, h = A4
-    y = h - 25 * mm
-
-    def line(txt: str, dy: float = 7 * mm, size: int = 11, bold: bool = False):
-        nonlocal y
-        c.setFont("Helvetica-Bold" if bold else "Helvetica", size)
-        c.drawString(20 * mm, y, txt)
-        y -= dy
-
-    line("Tillfälligt låneavtal – Bil", size=16, bold=True, dy=10 * mm)
-    line(f"Skapat: {iso_dt(now_utc())}", size=10, dy=8 * mm)
-
-    line("Utlånare (ägare)", bold=True)
-    line(f"Namn: {data.get('utlanare_namn','')}")
-    line(f"Personnummer: {data.get('utlanare_pnr','')}")
-    line(f"Adress: {data.get('utlanare_adress','')}")
-    line(f"Telefon: {data.get('utlanare_tel','')}")
-    line(f"E-post: {data.get('utlanare_epost','')}", dy=10 * mm)
-
-    line("Låntagare (skuldsatt)", bold=True)
-    line(f"Namn: {data.get('lantagare_namn','')}")
-    line(f"Personnummer: {data.get('lantagare_pnr','')}")
-    line(f"Adress: {data.get('lantagare_adress','')}")
-    line(f"Telefon: {data.get('lantagare_tel','')}")
-    line(f"E-post: {data.get('lantagare_epost','')}", dy=10 * mm)
-
-    line("Fordon", bold=True)
-    line(f"Märke/modell: {data.get('bil_marke_modell','')}")
-    line(f"Registreringsnummer: {data.get('bil_regnr','')}", dy=10 * mm)
-
-    line("Avtalsperiod", bold=True)
-    line(f"Från: {data.get('from_dt','')}")
-    line(f"Till: {data.get('to_dt','')}", dy=10 * mm)
-
-    line("Ändamål / syfte", bold=True)
-    txt = (data.get("andamal") or "").strip() or "-"
-    c.setFont("Helvetica", 11)
-    max_chars = 95
-    for chunk in [txt[i:i + max_chars] for i in range(0, len(txt), max_chars)]:
-        c.drawString(20 * mm, y, chunk)
-        y -= 6 * mm
-        if y < 25 * mm:
-            c.showPage()
-            y = h - 25 * mm
-            c.setFont("Helvetica", 11)
-
-    c.showPage()
-    c.save()
-    return buf.getvalue()
-
-
-@dataclass
-class OneflowConfig:
-    token: str
-    base_url: str
-    workspace_id: str
-    template_id: str
-
-
-def get_oneflow_config() -> Optional[OneflowConfig]:
-    if not (ONEFLOW_API_TOKEN and ONEFLOW_WORKSPACE_ID and ONEFLOW_TEMPLATE_ID and ONEFLOW_BASE_URL):
-        return None
-    return OneflowConfig(
-        token=ONEFLOW_API_TOKEN,
-        base_url=ONEFLOW_BASE_URL.rstrip("/"),
-        workspace_id=ONEFLOW_WORKSPACE_ID,
-        template_id=ONEFLOW_TEMPLATE_ID,
-    )
-
-
-async def oneflow_create_contract_from_template(
-    *,
-    cfg: OneflowConfig,
-    agreement_id: str,
-    utlanare_email: str,
-    lantagare_email: str,
-    variables: Dict[str, Any],
-) -> Dict[str, Any]:
-    headers = {
-        "Authorization": f"Bearer {cfg.token}",
-        "Content-Type": "application/json",
-        "Accept": "application/json",
+def page_ctx(request: Request, path: str, title: str, description: str = "") -> Dict[str, Any]:
+    return {
+        "request": request,
+        "path": path,
+        "title": title,
+        "description": description,
+        "year": datetime.now().year,
     }
 
-    async with httpx.AsyncClient(timeout=45) as client:
-        r = await client.post(
-            f"{cfg.base_url}/contracts/create_from_template",
-            headers=headers,
-            json={
-                "workspace_id": cfg.workspace_id,
-                "template_id": cfg.template_id,
-                "name": f"HP Juridik – Låna bil ({agreement_id})",
-                "external_id": agreement_id,
-            },
-        )
-        if r.status_code >= 300:
-            raise RuntimeError(f"Oneflow create error {r.status_code}: {r.text}")
 
-        contract = r.json()
-        contract_id = contract.get("id") or contract.get("contract_id") or contract.get("data", {}).get("id")
-        if not contract_id:
-            raise RuntimeError(f"Oneflow: kunde inte läsa contract id. Response: {contract}")
-
-        # Best effort: variables/participants/publish
-        try:
-            await client.post(
-                f"{cfg.base_url}/contracts/{contract_id}/variables",
-                headers=headers,
-                json={"variables": variables},
-            )
-        except Exception:
-            pass
-
-        try:
-            await client.post(
-                f"{cfg.base_url}/contracts/{contract_id}/participants",
-                headers=headers,
-                json={
-                    "participants": [
-                        {"type": "signer", "email": utlanare_email, "name": variables.get("utlanare_namn", "Utlånare")},
-                        {"type": "signer", "email": lantagare_email, "name": variables.get("lantagare_namn", "Låntagare")},
-                    ]
-                },
-            )
-        except Exception:
-            pass
-
-        try:
-            await client.post(f"{cfg.base_url}/contracts/{contract_id}/publish", headers=headers, json={})
-        except Exception:
-            pass
-
-        return {"contract_id": contract_id, "raw": contract}
-
-
-PRICE_PREMIUM_SEK = 150
-
-
-def stripe_amount_ore(sek: int) -> int:
-    return int(sek) * 100
-
-
-def make_order_token(payload: Dict[str, Any]) -> str:
-    raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("utf-8").rstrip("=")
-
-
-def parse_order_token(token: str) -> Dict[str, Any]:
-    pad = "=" * (-len(token) % 4)
-    raw = base64.urlsafe_b64decode((token + pad).encode("utf-8"))
-    return json.loads(raw.decode("utf-8"))
-
-
-async def stripe_create_checkout_session(*, order_token: str, customer_email: str) -> str:
-    if not STRIPE_SECRET_KEY:
-        raise RuntimeError("STRIPE_SECRET_KEY saknas i environment")
-
-    success_url = f"{BASE_URL}/checkout-success?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{BASE_URL}/lana-bil-till-skuldsatt/review?token={order_token}&cancel=1"
-
-    session = stripe.checkout.Session.create(
-        mode="payment",
-        payment_method_types=["card"],
-        customer_email=customer_email,
-        line_items=[
-            {
-                "price_data": {
-                    "currency": "sek",
-                    "product_data": {"name": "Premium – Signering (BankID via Oneflow)"},
-                    "unit_amount": stripe_amount_ore(PRICE_PREMIUM_SEK),
-                },
-                "quantity": 1,
-            }
-        ],
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={"order_token": order_token, "kind": "lana_bil_premium"},
-    )
-    return session.url
-
-
-def verify_stripe_webhook(payload: bytes, sig_header: str) -> stripe.Event:
-    if not STRIPE_WEBHOOK_SECRET:
-        raise RuntimeError("STRIPE_WEBHOOK_SECRET saknas i environment")
-    return stripe.Webhook.construct_event(payload=payload, sig_header=sig_header, secret=STRIPE_WEBHOOK_SECRET)
-
-
-@app.get("/health", response_class=JSONResponse)
-async def health() -> Dict[str, Any]:
-    return {"ok": True, "time": iso_dt(now_utc())}
-
-
-@app.head("/", response_class=Response)
-async def head_root() -> Response:
-    return Response(status_code=200)
-
-
+# =========================
+# Routes: Pages
+# =========================
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        "pages/home.html",
-        page_ctx(request, "/", "HP Juridik", "Juridisk hjälp och dokumentmallar"),
-    )
-
-
-@app.get("/tjanster", response_class=HTMLResponse)
-async def services(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        "pages/services.html",
-        page_ctx(request, "/tjanster", "Tjänster | HP Juridik", "Våra tjänster"),
-    )
-
-
-@app.get("/terms", response_class=HTMLResponse)
-async def terms(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(
-        "pages/terms.html",
-        page_ctx(request, "/terms", "Villkor | HP Juridik", "Villkor"),
-    )
-
+async def home(request: Request):
+    ctx = page_ctx(request, "/", "HP Juridik", "Juridisk hjälp och dokument")
+    # flags för att visa tack-ruta på home efter contact-submit
+    ctx.update({
+        "contact_sent": request.session.pop("contact_sent", False),
+        "contact_error": request.session.pop("contact_error", None),
+    })
+    return templates.TemplateResponse("pages/home.html", ctx)
 
 @app.get("/kontakta-oss", response_class=HTMLResponse)
-async def contact_page(request: Request) -> HTMLResponse:
-    ctx = page_ctx(request, "/kontakta-oss", "Kontakt | HP Juridik", "Kontakta oss")
-    ctx.update({"sent_ok": False, "sent_err": None})
+async def contact_page(request: Request):
+    ctx = page_ctx(request, "/kontakta-oss", "Kontakt | HP Juridik", "Kontakta HP Juridik")
+    # (Sidan kan fortfarande finnas, men vi vill inte redirecta hit efter submit)
+    ctx.update({
+        "sent_ok": False,
+        "sent_error": None,
+    })
     return templates.TemplateResponse("pages/contact.html", ctx)
 
-
+# Alias om du redan har form action="/contact"
+@app.post("/contact", response_class=HTMLResponse)
 @app.post("/kontakta-oss", response_class=HTMLResponse)
 async def contact_submit(
     request: Request,
@@ -359,288 +254,305 @@ async def contact_submit(
     epost: str = Form(...),
     telefon: str = Form(""),
     meddelande: str = Form(...),
-) -> HTMLResponse:
-    ts = iso_dt(now_utc())
-    ip = request.client.host if request.client else "unknown"
-    ua = request.headers.get("user-agent", "unknown")
+):
+    ts = now_utc_iso()
+    ip = client_ip(request)
+    ua = user_agent(request)
 
     subject = "HP Juridik | Ny kontaktförfrågan"
     body = (
-        "NY KONTAKTFÖRFRÅGAN (HPJURIDIK.SE)\n"
-        "================================\n\n"
-        f"Tid: {ts}\n"
+        "NY KONTAKTFÖRFRÅGAN (hpjuridik.se)\n"
+        "============================\n\n"
+        f"Tid (UTC): {ts}\n"
         f"Namn: {namn}\n"
         f"E-post: {epost}\n"
         f"Telefon: {telefon}\n\n"
         "Meddelande:\n"
         f"{meddelande}\n\n"
-        "----\n"
+        "Tekniskt:\n"
         f"IP: {ip}\n"
         f"UA: {ua}\n"
     )
 
-    ok = True
-    err = None
     try:
         await postmark_send(
-            to_email=CONTACT_TO,
+            to=CONTACT_TO,
             subject=subject,
             text_body=body,
-            from_email=MAIL_FROM,
-            reply_to=epost,
+            reply_to=epost,  # så du kan svara direkt
         )
+        request.session["contact_sent"] = True
+        request.session["contact_error"] = None
     except Exception as e:
-        ok = False
-        err = str(e)
+        log.exception("contact_submit failed")
+        request.session["contact_sent"] = False
+        request.session["contact_error"] = str(e)
 
-    ctx = page_ctx(request, "/kontakta-oss", "Kontakt | HP Juridik", "Kontakta oss")
-    ctx.update({"sent_ok": ok, "sent_err": err})
-    return templates.TemplateResponse("pages/contact.html", ctx)
+    # Viktigt: rendera HOME utan redirect till /kontakta-oss
+    return RedirectResponse(url="/", status_code=303)
 
 
+# =========================
+# Låna bil (form + review + free/premium)
+# =========================
 @app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
-async def lana_bil_form(request: Request) -> HTMLResponse:
-    ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "")
-    ctx.update({"sent": False, "error": None})
+async def lana_bil_form(request: Request):
+    ctx = page_ctx(
+        request,
+        "/lana-bil-till-skuldsatt",
+        "Låna bil till skuldsatt | HP Juridik",
+        "Skapa tillfälligt låneavtal för bil",
+    )
     return templates.TemplateResponse("pages/lana_bil.html", ctx)
 
-
 @app.post("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
-async def lana_bil_submit_to_review(
+async def lana_bil_submit(
     request: Request,
     utlanare_namn: str = Form(...),
     utlanare_pnr: str = Form(""),
     utlanare_adress: str = Form(...),
     utlanare_tel: str = Form(...),
     utlanare_epost: str = Form(...),
+
     lantagare_namn: str = Form(...),
     lantagare_pnr: str = Form(""),
     lantagare_adress: str = Form(...),
     lantagare_tel: str = Form(...),
     lantagare_epost: str = Form(...),
+
     bil_marke_modell: str = Form(...),
     bil_regnr: str = Form(...),
+
     from_dt: str = Form(...),
     to_dt: str = Form(...),
     andamal: str = Form(...),
-    disclaimer_accept: str = Form(...),
-    marketing_accept: str = Form(...),
-) -> HTMLResponse:
-    agreement_id = str(uuid.uuid4())
 
-    payload = {
-        "agreement_id": agreement_id,
+    disclaimer_accept: Optional[str] = Form(None),
+    marketing_accept: Optional[str] = Form(None),
+):
+    agreement_id = str(uuid.uuid4())
+    data = {
         "utlanare_namn": utlanare_namn,
         "utlanare_pnr": utlanare_pnr,
         "utlanare_adress": utlanare_adress,
         "utlanare_tel": utlanare_tel,
         "utlanare_epost": utlanare_epost,
+
         "lantagare_namn": lantagare_namn,
         "lantagare_pnr": lantagare_pnr,
         "lantagare_adress": lantagare_adress,
         "lantagare_tel": lantagare_tel,
         "lantagare_epost": lantagare_epost,
+
         "bil_marke_modell": bil_marke_modell,
         "bil_regnr": bil_regnr,
         "from_dt": from_dt,
         "to_dt": to_dt,
         "andamal": andamal,
-        "disclaimer_accept": True,
-        "marketing_accept": True,
-        "created_at": iso_dt(now_utc()),
-        "ip": request.client.host if request.client else "unknown",
-        "ua": request.headers.get("user-agent", "unknown"),
+        "disclaimer_accept": bool(disclaimer_accept),
+        "marketing_accept": bool(marketing_accept),
     }
 
-    token = make_order_token(payload)
-    return RedirectResponse(url=f"/lana-bil-till-skuldsatt/review?token={token}", status_code=303)
+    agreement = Agreement(
+        agreement_id=agreement_id,
+        created_utc=now_utc_iso(),
+        data=data,
+        pdf_b64="",  # set below
+    )
+    pdf = make_pdf_bytes(agreement)
+    agreement.pdf_b64 = base64.b64encode(pdf).decode("utf-8")
+    AGREEMENTS[agreement_id] = agreement
 
+    request.session["agreement_id"] = agreement_id
+    return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
 @app.get("/lana-bil-till-skuldsatt/review", response_class=HTMLResponse)
-async def lana_bil_review(request: Request, token: str, cancel: Optional[str] = None) -> HTMLResponse:
-    try:
-        order = parse_order_token(token)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid token")
+async def lana_bil_review_get(request: Request):
+    agreement_id = request.session.get("agreement_id")
+    if not agreement_id or agreement_id not in AGREEMENTS:
+        return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
 
-    ctx = page_ctx(request, "/lana-bil-till-skuldsatt/review", "Granska | Låna bil | HP Juridik", "")
-    ctx.update(
-        {
-            "order": order,
-            "token": token,
-            "premium_price_sek": PRICE_PREMIUM_SEK,
-            "cancel": bool(cancel),
-            "stripe_enabled": bool(STRIPE_SECRET_KEY),
-        }
-    )
+    ag = AGREEMENTS[agreement_id]
+    ctx = page_ctx(request, "/lana-bil-till-skuldsatt/review", "Granska | HP Juridik", "")
+    ctx.update({
+        "agreement_id": ag.agreement_id,
+        "data": ag.data,
+        "premium_price_sek": f"{PREMIUM_PRICE_ORE/100:.0f}",
+        "msg": request.session.pop("review_msg", None),
+        "err": request.session.pop("review_err", None),
+    })
     return templates.TemplateResponse("pages/lana_bil_review.html", ctx)
 
+@app.post("/lana-bil-till-skuldsatt/review", response_class=HTMLResponse)
+async def lana_bil_review_post(
+    request: Request,
+    plan: str = Form(...),  # "free" | "premium"
+    disclaimer_accept: Optional[str] = Form(None),
+    marketing_accept: Optional[str] = Form(None),
+):
+    agreement_id = request.session.get("agreement_id")
+    if not agreement_id or agreement_id not in AGREEMENTS:
+        return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
 
-@app.post("/lana-bil-till-skuldsatt/free", response_class=HTMLResponse)
-async def lana_bil_free(request: Request, token: str = Form(...)) -> HTMLResponse:
-    try:
-        order = parse_order_token(token)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid token")
+    ag = AGREEMENTS[agreement_id]
 
-    pdf_bytes = build_loan_pdf(order)
-    filename = f"laneavtal-bil-{order['agreement_id']}.pdf"
-    attach = pdf_to_attachment(filename, pdf_bytes)
+    # krav: båda checkboxar i din UI (som du hade)
+    if not disclaimer_accept or not marketing_accept:
+        request.session["review_err"] = "Du måste kryssa i båda rutorna för att gå vidare."
+        return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
-    subj_user = "HP Juridik – Ditt låneavtal (PDF)"
-    text_user = (
-        "Hej!\n\n"
-        "Här kommer ditt låneavtal (PDF) baserat på uppgifterna du angivit.\n\n"
-        "/HP Juridik\n"
-    )
+    # uppdatera sparat
+    ag.data["disclaimer_accept"] = True
+    ag.data["marketing_accept"] = True
 
-    subj_lead = "Lead: Låna bil till skuldsatt (Gratis nedladdning)"
-    lead_body = (
-        "NY LEAD (GRATIS)\n"
-        "=================\n\n"
-        f"Agreement ID: {order.get('agreement_id')}\n"
-        f"Utlånare: {order.get('utlanare_namn')} – {order.get('utlanare_epost')}\n"
-        f"Låntagare: {order.get('lantagare_namn')} – {order.get('lantagare_epost')}\n"
-        f"Regnr: {order.get('bil_regnr')}\n"
-        f"Period: {order.get('from_dt')} -> {order.get('to_dt')}\n\n"
-        f"Newsletter opt-in: {order.get('marketing_accept')}\n\n"
-        f"IP: {order.get('ip')}\n"
-        f"UA: {order.get('ua')}\n"
-    )
+    pdf = base64.b64decode(ag.pdf_b64.encode("utf-8"))
+    attach = [pdf_attachment(f"laneavtal_{ag.agreement_id}.pdf", pdf)]
 
-    err = None
-    try:
-        await postmark_send(to_email=order["utlanare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
-        await postmark_send(to_email=order["lantagare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
-        await postmark_send(to_email=LEAD_INBOX, subject=subj_lead, text_body=lead_body, attachments=[attach])
-    except Exception as e:
-        err = str(e)
+    # Gratis: maila PDF till båda + lead inbox
+    if plan == "free":
+        try:
+            subject = "HP Juridik | Låneavtal (bil) - PDF"
+            body = (
+                "Här kommer ert låneavtal som PDF.\n\n"
+                f"Avtals-ID: {ag.agreement_id}\n"
+                "Om ni behöver ändra något, skapa ett nytt avtal via hpjuridik.se.\n"
+            )
+            await postmark_send(
+                to=f"{ag.data['utlanare_epost']},{ag.data['lantagare_epost']}",
+                subject=subject,
+                text_body=body,
+                attachments=attach,
+            )
 
-    ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "")
-    ctx.update({"sent": err is None, "error": err})
-    return templates.TemplateResponse("pages/lana_bil.html", ctx)
+            # notifiering till lanabil@ (lead inbox)
+            await postmark_send(
+                to=LEAD_INBOX,
+                subject="Lead: Låna bil till skuldsatt (Gratis nedladdning)",
+                text_body=(
+                    "NY LEAD (GRATIS)\n"
+                    "==============\n\n"
+                    f"Agreement ID: {ag.agreement_id}\n"
+                    f"Utlånare: {ag.data['utlanare_namn']} - {ag.data['utlanare_epost']}\n"
+                    f"Låntagare: {ag.data['lantagare_namn']} - {ag.data['lantagare_epost']}\n"
+                    f"Regnr: {ag.data['bil_regnr']}\n"
+                    f"Period: {ag.data['from_dt']} -> {ag.data['to_dt']}\n\n"
+                    f"Newsletter opt-in: {ag.data.get('marketing_accept')}\n"
+                    f"IP: {client_ip(request)}\n"
+                    f"UA: {user_agent(request)}\n"
+                ),
+            )
 
+            request.session["review_msg"] = "Klart! PDF är skickad till båda parter."
+        except Exception as e:
+            log.exception("free flow failed")
+            request.session["review_err"] = f"Något gick fel vid utskick: {e}"
 
-@app.post("/lana-bil-till-skuldsatt/premium", response_class=HTMLResponse)
-async def lana_bil_premium_start(request: Request, token: str = Form(...)) -> Response:
-    try:
-        order = parse_order_token(token)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid token")
+        return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
-    if not STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=400, detail="Stripe not configured")
+    # Premium: Stripe Checkout
+    if plan == "premium":
+        try:
+            session = stripe.checkout.Session.create(
+                mode="payment",
+                currency=CURRENCY,
+                line_items=[
+                    {
+                        "price_data": {
+                            "currency": CURRENCY,
+                            "product_data": {"name": "Premium: Låneavtal (bil) + nästa steg"},
+                            "unit_amount": PREMIUM_PRICE_ORE,
+                        },
+                        "quantity": 1,
+                    }
+                ],
+                metadata={"agreement_id": ag.agreement_id},
+                success_url=f"{BASE_URL}/checkout-success?agreement_id={ag.agreement_id}",
+                cancel_url=f"{BASE_URL}/lana-bil-till-skuldsatt/review",
+            )
+            ag.stripe_session_id = session["id"]
+            AGREEMENTS[agreement_id] = ag
+            return RedirectResponse(url=session["url"], status_code=303)
+        except Exception as e:
+            log.exception("stripe session create failed")
+            request.session["review_err"] = f"Kunde inte starta betalning: {e}"
+            return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
-    customer_email = order.get("utlanare_epost") or order.get("lantagare_epost")
-    url = await stripe_create_checkout_session(order_token=token, customer_email=customer_email)
-    return RedirectResponse(url=url, status_code=303)
+    request.session["review_err"] = "Okänd plan."
+    return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
 
 @app.get("/checkout-success", response_class=HTMLResponse)
-async def checkout_success(request: Request, session_id: str) -> HTMLResponse:
-    return HTMLResponse("<h1>Tack!</h1><p>Betalning mottagen. (Webhooken sköter resten.)</p>", status_code=200)
+async def checkout_success(request: Request, agreement_id: str = ""):
+    ctx = page_ctx(request, "/checkout-success", "Tack! | HP Juridik", "")
+    ctx.update({"agreement_id": agreement_id})
+    return templates.TemplateResponse("pages/checkout_success.html", ctx)
 
 
-@app.post("/stripe/webhook", response_class=JSONResponse)
-async def stripe_webhook(request: Request) -> JSONResponse:
+# =========================
+# Stripe webhook
+# =========================
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
-
     try:
-        event = verify_stripe_webhook(payload, sig)
+        event = stripe.Webhook.construct_event(payload, sig, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Webhook verification failed: {e}")
+        log.warning("stripe webhook signature invalid: %s", e)
+        return Response(status_code=400)
 
-    if event["type"] != "checkout.session.completed":
-        return JSONResponse({"ok": True})
+    event_type = event.get("type")
+    data_object = event.get("data", {}).get("object", {})
 
-    session = event["data"]["object"]
-    metadata = session.get("metadata", {}) or {}
-    token = metadata.get("order_token")
-    if not token:
-        return JSONResponse({"ok": True, "ignored": True})
+    # Viktigast: checkout.session.completed
+    if event_type == "checkout.session.completed":
+        agreement_id = (data_object.get("metadata") or {}).get("agreement_id")
+        if agreement_id and agreement_id in AGREEMENTS:
+            ag = AGREEMENTS[agreement_id]
+            ag.is_paid = True
+            AGREEMENTS[agreement_id] = ag
 
-    try:
-        order = parse_order_token(token)
-    except Exception:
-        return JSONResponse({"ok": True, "ignored": True})
+            # Efter betalning: skicka PDF till båda + lead inbox
+            try:
+                pdf = base64.b64decode(ag.pdf_b64.encode("utf-8"))
+                attach = [pdf_attachment(f"laneavtal_{ag.agreement_id}.pdf", pdf)]
 
-    pdf_bytes = build_loan_pdf(order)
-    filename = f"laneavtal-bil-{order['agreement_id']}.pdf"
-    attach = pdf_to_attachment(filename, pdf_bytes)
+                await postmark_send(
+                    to=f"{ag.data['utlanare_epost']},{ag.data['lantagare_epost']}",
+                    subject="HP Juridik | Premium - Låneavtal (bil) - PDF",
+                    text_body=(
+                        "Tack! Betalning mottagen.\n\n"
+                        "Här kommer ert avtal som PDF.\n"
+                        f"Avtals-ID: {ag.agreement_id}\n\n"
+                        "Nästa steg (digital signering) kopplas på i nästa iteration.\n"
+                    ),
+                    attachments=attach,
+                )
 
-    subj_user = "HP Juridik – Premium: Ditt låneavtal (PDF)"
-    text_user = (
-        "Hej!\n\n"
-        "Här kommer ditt låneavtal (PDF).\n"
-        "Premium: digital signering initieras i nästa steg (om Oneflow är aktiverat).\n\n"
-        "/HP Juridik\n"
-    )
+                await postmark_send(
+                    to=LEAD_INBOX,
+                    subject="Lead: Låna bil till skuldsatt (Premium betalning)",
+                    text_body=(
+                        "NY LEAD (PREMIUM)\n"
+                        "=================\n\n"
+                        f"Agreement ID: {ag.agreement_id}\n"
+                        f"Stripe session: {ag.stripe_session_id}\n"
+                        f"Utlånare: {ag.data['utlanare_namn']} - {ag.data['utlanare_epost']}\n"
+                        f"Låntagare: {ag.data['lantagare_namn']} - {ag.data['lantagare_epost']}\n"
+                        f"Regnr: {ag.data['bil_regnr']}\n"
+                        f"Period: {ag.data['from_dt']} -> {ag.data['to_dt']}\n\n"
+                        f"Newsletter opt-in: {ag.data.get('marketing_accept')}\n"
+                    ),
+                )
+            except Exception:
+                log.exception("post-payment email failed")
 
-    subj_lead = "Lead: Låna bil till skuldsatt (Premium betalning)"
-    lead_body = (
-        "NY LEAD (PREMIUM)\n"
-        "=================\n\n"
-        f"Agreement ID: {order.get('agreement_id')}\n"
-        f"Stripe session: {session.get('id')}\n"
-        f"Utlånare: {order.get('utlanare_namn')} – {order.get('utlanare_epost')}\n"
-        f"Låntagare: {order.get('lantagare_namn')} – {order.get('lantagare_epost')}\n"
-        f"Regnr: {order.get('bil_regnr')}\n"
-        f"Period: {order.get('from_dt')} -> {order.get('to_dt')}\n\n"
-        f"Newsletter opt-in: {order.get('marketing_accept')}\n\n"
-        f"IP: {order.get('ip')}\n"
-        f"UA: {order.get('ua')}\n"
-    )
-
-    oneflow_status = None
-    oneflow_err = None
-
-    cfg = get_oneflow_config()
-    if cfg:
-        try:
-            variables = {
-                "agreement_id": order.get("agreement_id"),
-                "utlanare_namn": order.get("utlanare_namn"),
-                "lantagare_namn": order.get("lantagare_namn"),
-                "bil_regnr": order.get("bil_regnr"),
-                "bil_marke_modell": order.get("bil_marke_modell"),
-                "from_dt": order.get("from_dt"),
-                "to_dt": order.get("to_dt"),
-                "andamal": order.get("andamal"),
-            }
-            res = await oneflow_create_contract_from_template(
-                cfg=cfg,
-                agreement_id=order["agreement_id"],
-                utlanare_email=order["utlanare_epost"],
-                lantagare_email=order["lantagare_epost"],
-                variables=variables,
-            )
-            oneflow_status = res.get("contract_id")
-        except Exception as e:
-            oneflow_err = str(e)
-
-    try:
-        await postmark_send(to_email=order["utlanare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
-        await postmark_send(to_email=order["lantagare_epost"], subject=subj_user, text_body=text_user, attachments=[attach])
-
-        lead_plus = lead_body
-        if oneflow_status:
-            lead_plus += f"\nOneflow contract_id: {oneflow_status}\n"
-        if oneflow_err:
-            lead_plus += f"\nOneflow error: {oneflow_err}\n"
-
-        await postmark_send(to_email=LEAD_INBOX, subject=subj_lead, text_body=lead_plus, attachments=[attach])
-    except Exception as e:
-        return JSONResponse({"ok": False, "mail_error": str(e), "oneflow": oneflow_status, "oneflow_err": oneflow_err})
-
-    return JSONResponse({"ok": True, "oneflow": oneflow_status, "oneflow_err": oneflow_err})
+    return Response(status_code=200)
 
 
-@app.get("/contact", response_class=HTMLResponse)
-async def contact_alias_get(request: Request) -> HTMLResponse:
-    return RedirectResponse(url="/kontakta-oss", status_code=307)
-
-
-@app.post("/contact", response_class=HTMLResponse)
-async def contact_alias_post(request: Request) -> HTMLResponse:
-    return RedirectResponse(url="/kontakta-oss", status_code=307)
+# =========================
+# Health
+# =========================
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True}
