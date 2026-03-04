@@ -625,6 +625,7 @@ async def stripe_webhook(request: Request):
     session_id = session_obj.get("id")
     metadata = session_obj.get("metadata") or {}
     agreement_id = metadata.get("agreement_id")
+    print("AGREEMENTS keys count:", len(AGREEMENTS))
 
     print("checkout.session.completed session_id:", session_id, "agreement_id:", agreement_id)
 
