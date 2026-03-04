@@ -1,17 +1,22 @@
 <header class="header">
   <div class="container header-inner">
-    <a class="logo" href="/">HP Juridik</a>
+    <!-- LOGGA / BRAND -->
+    <a class="logo" href="/">
+      <img src="{{ url_for('static', path='hp-juridik-logo.png') }}" alt="HP Juridik" class="logo-img">
+    </a>
 
+    <!-- BURGER (MOBIL) -->
     <button class="burger" aria-label="Öppna meny" onclick="document.body.classList.toggle('nav-open')">
       ☰
     </button>
 
-   <nav class="nav">
-  <a href="/#hem">Kontakt</a>
-  <a href="#om-oss">Om oss</a>
-  <a href="/#tjanster">Tjänster</a>
-  <a href="/#cases">Cases</a>
-  <a href="/lana-bil-till-skuldsatt">Låna bil (avtal)</a>
-</nav>
+    <!-- NAV -->
+    <nav class="nav">
+      <a href="/kontakta-oss">Kontakt</a>
+      <a href="/#om-oss">Om oss</a>
+      <a href="/#tjanster">Tjänster</a>
+      <a href="/#cases">Cases</a>
+      <a href="/lana-bil-till-skuldsatt">Låna bil (avtal)</a>
+    </nav>
   </div>
 </header>
