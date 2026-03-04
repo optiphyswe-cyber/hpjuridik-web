@@ -6,32 +6,41 @@
 
   <title>{% if seo and seo.title %}{{ seo.title }}{% else %}HP Juridik{% endif %}</title>
   <meta name="description" content="{% if seo and seo.description %}{{ seo.description }}{% else %}HP Juridik{% endif %}">
-  <link rel="canonical" href="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://www.hpjuridik.se/{% endif %}">
+  <link rel="canonical" href="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://hpjuridik.se/{% endif %}">
+  <meta name="robots" content="{% if seo and seo.robots %}{{ seo.robots }}{% else %}index,follow{% endif %}">
+
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 
 <body>
-  <header style="padding:12px 18px; border-bottom:1px solid #e7e7e7;">
-    <nav style="display:flex; gap:14px; justify-content:flex-end; align-items:center;">
-      <a href="/">Hem</a>
-      <a href="/kontakta-oss">Kontakt</a>
-      <a href="/lana-bil-till-skuldsatt">Låna bil</a>
-    </nav>
+  <header class="site-header">
+    <div class="container header-wrap">
+      <div class="brand">
+        <a href="/" class="brand-link">HP Juridik</a>
+      </div>
+
+      <nav class="nav">
+        <a href="/kontakta-oss">Kontakt</a>
+        <a href="/#om-oss">Om oss</a>
+        <a href="/#tjanster">Tjänster</a>
+        <a href="/#cases">Cases</a>
+        <a href="/lana-bil-till-skuldsatt">Låna bil (avtal)</a>
+      </nav>
+    </div>
   </header>
 
-  <div style="text-align:center; padding:16px 0 0;">
-    <img src="/static/hp-juridik-logo.png" alt="HP Juridik" style="max-width:160px;">
-  </div>
+  {% block content %}{% endblock %}
 
-  <main style="max-width:920px; margin:0 auto; padding:18px;">
-    {% block content %}{% endblock %}
-  </main>
-
-  <footer style="padding:18px; border-top:1px solid #e7e7e7; font-size:14px;">
-    <div style="max-width:920px; margin:0 auto;">
-      <div><b>{{ company.brand }}</b></div>
-      <div>{{ company.address }}</div>
-      <div>{{ company.company }} · {{ company.orgnr }}</div>
+  <footer class="site-footer">
+    <div class="container">
+      <div class="muted">
+        <strong>{{ company.brand }}</strong><br>
+        📞 <a href="tel:0763171284">076-317 12 84</a> ·
+        ✉ <a href="mailto:hp@hpjuridik.se">hp@hpjuridik.se</a><br>
+        🌐 <a href="https://hpjuridik.se" target="_blank">hpjuridik.se</a><br>
+        📍 {{ company.address }}<br>
+        🏢 {{ company.company }} · Org.nr: {{ company.orgnr }}
+      </div>
     </div>
   </footer>
 </body>
