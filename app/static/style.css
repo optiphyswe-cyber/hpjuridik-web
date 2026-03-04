@@ -1347,46 +1347,123 @@ html {
   flex-wrap:wrap;
 }
 /* =========================
-   Sticky ring-knapp mobil
+   Sticky Call CTA – Premium
    ========================= */
 
+/* Visa bara på mobil */
 .sticky-call{
   position: fixed;
-  bottom: 20px;
   left: 50%;
   transform: translateX(-50%);
+  bottom: calc(14px + env(safe-area-inset-bottom));
   z-index: 9999;
 
   display: none;
+  width: min(520px, calc(100% - 28px));
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 
-  background: #0b1220;
-  color: #fff;
-  padding: 14px 22px;
-
+  padding: 12px 14px;
   border-radius: 18px;
-  font-weight: 600;
-  font-size: 15px;
 
-  box-shadow: 0 12px 30px rgba(0,0,0,0.25);
+  /* grön “solution” vibe */
+  background: linear-gradient(135deg, #16a34a 0%, #22c55e 55%, #10b981 100%);
+  color: #ffffff;
+
+  border: 1px solid rgba(255,255,255,0.18);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(16,185,129,0.18) inset;
+
+  text-decoration: none;
+
+  /* smooth */
+  transition: transform .18s ease, filter .18s ease, box-shadow .18s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 768px){
+  .sticky-call{ display: flex; }
+}
+
+/* ikon-bubbla (din bild rund) */
+.sticky-ic{
+  width: 46px;
+  height: 46px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.16);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  box-shadow: 0 8px 18px rgba(0,0,0,0.12);
+}
+
+.sticky-ic img{
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;      /* rund bild */
+  object-fit: cover;
+  display: block;
+  background: rgba(255,255,255,0.10);
+}
+
+/* text */
+.sticky-text{
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+  min-width: 0;
+}
+
+.sticky-title{
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-size: 15px;
+}
+
+.sticky-sub{
+  font-size: 12px;
+  opacity: 0.95;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* pil */
+.sticky-go{
+  margin-left: auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 14px;
+  background: rgba(0,0,0,0.12);
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+
+.sticky-go svg{
+  width: 18px;
+  height: 18px;
+}
+
+/* hover/press */
+.sticky-call:hover{
+  filter: brightness(1.03);
   text-decoration: none;
 }
 
-/* ikon */
-.sticky-call img{
-  width: 22px;
-  height: 22px;
-  object-fit: contain;
+.sticky-call:active{
+  transform: translateX(-50%) translateY(1px);
+  filter: brightness(0.98);
 }
 
-/* mobil */
-@media (max-width: 768px){
-
+/* liten “soft pulse” (lugnt, inte gimmick) */
+@media (prefers-reduced-motion: no-preference){
   .sticky-call{
-    display: flex;
-    width: calc(100% - 40px);
-    justify-content: center;
+    animation: stickyPulse 3.6s ease-in-out infinite;
   }
-
+  @keyframes stickyPulse{
+    0%, 100%{ box-shadow: 0 18px 40px rgba(0,0,0,0.22), 0 0 0 1px rgba(16,185,129,0.18) inset; }
+    50%{ box-shadow: 0 22px 48px rgba(0,0,0,0.24), 0 0 0 1px rgba(16,185,129,0.26) inset; }
+  }
 }
