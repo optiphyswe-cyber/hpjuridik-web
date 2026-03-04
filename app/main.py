@@ -26,7 +26,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 # ------------------------------------------------------------------------------
 # App setup
 # ------------------------------------------------------------------------------
-app = FastAPI()
+app = FastAPI(redirect_slashes=False)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
 
