@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List, Tuple
 
 import stripe
+import requests
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,9 +39,9 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 # ------------------------------------------------------------------------------
 BASE_URL = os.getenv("BASE_URL", "http://localhost:10000").rstrip("/")
 
-MAIL_FROM = os.getenv("MAIL_FROM", "HP@hpjuridik.se")
+MAIL_FROM = os.getenv("MAIL_FROM", "lanabil@hpjuridik.se")
 CONTACT_TO = os.getenv("CONTACT_TO", "hp@hpjuridik.se")
-CONTACT_FROM = os.getenv("CONTACT_FROM", MAIL_FROM)
+CONTACT_FROM = os.getenv("CONTACT_FROM", "hp@hpjuridik.se")  # försök ha hp@ som From
 LEAD_INBOX = os.getenv("LEAD_INBOX", "lanabil@hpjuridik.se")
 
 SMTP_HOST = os.getenv("SMTP_HOST", "")
@@ -55,11 +56,24 @@ PREMIUM_PRICE_ORE = int(os.getenv("PREMIUM_PRICE_ORE", "15000"))
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
-CANONICAL_HOST = os.getenv("CANONICAL_HOST", "hpjuridik.se").strip().lower()
+# Canonical (ni kör www som primary)
+CANONICAL_HOST = os.getenv("CANONICAL_HOST", "www.hpjuridik.se").strip().lower()
 SITE_URL = os.getenv("SITE_URL", f"https://{CANONICAL_HOST}").rstrip("/")
 
 # Filpersistens (MVP): funkar även om processen restartar / annan worker får webhooken
 AGREEMENTS_DIR = os.getenv("AGREEMENTS_DIR", "/tmp/hpj_agreements")
+
+# ------------------------------------------------------------------------------
+# Oneflow
+# ------------------------------------------------------------------------------
+ONEFLOW_API_TOKEN = os.getenv("ONEFLOW_API_TOKEN", "")
+ONEFLOW_BASE_URL = os.getenv("ONEFLOW_BASE_URL", "https://api.oneflow.com/v1").rstrip("/")
+ONEFLOW_WORKSPACE_ID = os.getenv("ONEFLOW_WORKSPACE_ID", "")  # rekommenderas
+ONEFLOW_TEMPLATE_ID = os.getenv("ONEFLOW_TEMPLATE_ID", "")    # krävs för template-flöde
+ONEFLOW_USER_EMAIL = os.getenv("ONEFLOW_USER_EMAIL", "")      # valfritt men ofta bra
+ONEFLOW_WEBHOOK_SECRET = os.getenv("ONEFLOW_WEBHOOK_SECRET", "")  # om du vill verifiera senare
+
+ONEFLOW_ENABLED = bool(ONEFLOW_API_TOKEN and ONEFLOW_TEMPLATE_ID)
 
 COMPANY = {
     "brand": "HP Juridik",
@@ -74,7 +88,7 @@ COMPANY = {
 
 
 # ------------------------------------------------------------------------------
-# Small utils
+# Utils
 # ------------------------------------------------------------------------------
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -100,35 +114,23 @@ def _ensure_dir(path: str) -> None:
 
 
 def _agreement_path(agreement_id: str) -> str:
-    # Bara uuid i våra id:n -> säkert filnamn
     return os.path.join(AGREEMENTS_DIR, f"{agreement_id}.json")
 
 
 def save_agreement(agreement: Dict[str, Any]) -> None:
     _ensure_dir(AGREEMENTS_DIR)
-    agreement_id = agreement["agreement_id"]
-    with open(_agreement_path(agreement_id), "w", encoding="utf-8") as f:
+    with open(_agreement_path(agreement["agreement_id"]), "w", encoding="utf-8") as f:
         json.dump(agreement, f, ensure_ascii=False)
 
 
 def load_agreement(agreement_id: str) -> Optional[Dict[str, Any]]:
+    if not agreement_id:
+        return None
     path = _agreement_path(agreement_id)
     if not os.path.exists(path):
         return None
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
-
-
-def mark_delivered(agreement_id: str, delivered: bool, is_paid: bool = False, stripe_session_id: Optional[str] = None) -> None:
-    ag = load_agreement(agreement_id)
-    if not ag:
-        return
-    ag["delivered"] = bool(delivered)
-    if is_paid:
-        ag["is_paid"] = True
-    if stripe_session_id:
-        ag["stripe_session_id"] = stripe_session_id
-    save_agreement(ag)
 
 
 # ------------------------------------------------------------------------------
@@ -168,17 +170,6 @@ def _smtp_send(
         server.send_message(msg)
 
 
-def send_email(
-    to_emails: List[str],
-    subject: str,
-    text: str,
-    pdf_bytes: Optional[bytes] = None,
-    reply_to: Optional[str] = None,
-    from_email: Optional[str] = None,
-) -> None:
-    _smtp_send(to_emails, subject, text, pdf_bytes=pdf_bytes, reply_to=reply_to, from_email=from_email)
-
-
 def safe_send_email(
     to_emails: List[str],
     subject: str,
@@ -188,7 +179,7 @@ def safe_send_email(
     from_email: Optional[str] = None,
 ) -> Tuple[bool, Optional[str]]:
     try:
-        send_email(to_emails, subject, text, pdf_bytes=pdf_bytes, reply_to=reply_to, from_email=from_email)
+        _smtp_send(to_emails, subject, text, pdf_bytes=pdf_bytes, reply_to=reply_to, from_email=from_email)
         return True, None
     except Exception as e:
         return False, str(e)
@@ -280,6 +271,110 @@ def build_loan_pdf(flat: Dict[str, Any]) -> bytes:
 
 
 # ------------------------------------------------------------------------------
+# Oneflow helpers
+# ------------------------------------------------------------------------------
+class OneflowError(RuntimeError):
+    pass
+
+
+def oneflow_headers() -> Dict[str, str]:
+    if not ONEFLOW_API_TOKEN:
+        raise OneflowError("ONEFLOW_API_TOKEN saknas")
+    h = {
+        "x-oneflow-api-token": ONEFLOW_API_TOKEN,
+        "Content-Type": "application/json",
+    }
+    if ONEFLOW_USER_EMAIL:
+        h["x-oneflow-user-email"] = ONEFLOW_USER_EMAIL
+    return h
+
+
+def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Skapar kontrakt från template och sätter parter + BankID.
+    Oneflow skickar signeringsinbjudan efter publish.
+    """
+    if not ONEFLOW_TEMPLATE_ID:
+        raise OneflowError("ONEFLOW_TEMPLATE_ID saknas")
+
+    flat = agreement["flat"]
+    lender_name = flat.get("utlanare_namn") or "Utlånare"
+    lender_email = flat.get("utlanare_epost")
+    borrower_name = flat.get("lantagare_namn") or "Låntagare"
+    borrower_email = flat.get("lantagare_epost")
+
+    if not lender_email or not borrower_email:
+        raise OneflowError("Saknar e-post för en eller båda parter")
+
+    payload: Dict[str, Any] = {
+        "template_id": int(ONEFLOW_TEMPLATE_ID),
+        "name": f"Låna bil – {agreement['agreement_id']}",
+        "parties": [
+            {
+                "type": "individual",
+                "name": lender_name,
+                "participants": [{
+                    "name": lender_name,
+                    "email": lender_email,
+                    "delivery_channel": "email",
+                    "sign_method": "swedish_bankid",
+                }],
+            },
+            {
+                "type": "individual",
+                "name": borrower_name,
+                "participants": [{
+                    "name": borrower_name,
+                    "email": borrower_email,
+                    "delivery_channel": "email",
+                    "sign_method": "swedish_bankid",
+                }],
+            },
+        ],
+    }
+
+    # Om du har workspace-id så sätter vi det (bra)
+    if ONEFLOW_WORKSPACE_ID:
+        payload["workspace_id"] = int(ONEFLOW_WORKSPACE_ID)
+
+    r = requests.post(f"{ONEFLOW_BASE_URL}/contracts/create", headers=oneflow_headers(), json=payload, timeout=25)
+    if r.status_code >= 300:
+        raise OneflowError(f"Oneflow create failed {r.status_code}: {r.text}")
+
+    return r.json()
+
+
+def oneflow_publish_contract(contract: Dict[str, Any]) -> None:
+    """
+    Publicera kontraktet.
+    Vi använder _links.publish om den finns, annars fallback till /contracts/{id}/publish
+    """
+    contract_id = contract.get("id")
+    if not contract_id:
+        raise OneflowError("Oneflow contract saknar id")
+
+    publish_url = None
+    links = contract.get("_links") or {}
+    if isinstance(links, dict):
+        pub = links.get("publish") or {}
+        if isinstance(pub, dict):
+            publish_url = pub.get("href")
+
+    payload = {
+        "subject": "Signera ert avtal (BankID) – HP Juridik",
+        "message": "Hej! Oneflow skickar nu en signeringsinbjudan via e-post. Signera med BankID.\n\n/HP Juridik",
+    }
+
+    if publish_url:
+        r = requests.post(publish_url, headers=oneflow_headers(), json=payload, timeout=25)
+    else:
+        r = requests.post(f"{ONEFLOW_BASE_URL}/contracts/{int(contract_id)}/publish", headers=oneflow_headers(), json=payload, timeout=25)
+
+    if r.status_code >= 300:
+        raise OneflowError(f"Oneflow publish failed {r.status_code}: {r.text}")
+
+
+# ------------------------------------------------------------------------------
 # Delivery helpers
 # ------------------------------------------------------------------------------
 def deliver_free(agreement_id: str, agreement: Dict[str, Any]) -> None:
@@ -288,14 +383,16 @@ def deliver_free(agreement_id: str, agreement: Dict[str, Any]) -> None:
     lender_email = flat.get("utlanare_epost")
     borrower_email = flat.get("lantagare_epost")
 
-    send_email(
+    ok, err = safe_send_email(
         [lender_email, borrower_email],
         "Tillfälligt låneavtal – bil (PDF)",
         "Här kommer ert avtal som PDF.\n\n/HP Juridik",
         pdf_bytes=pdf_bytes,
     )
+    if not ok:
+        raise RuntimeError(err)
 
-    send_email(
+    safe_send_email(
         [LEAD_INBOX],
         "Lead: Låna bil till skuldsatt (FREE)",
         f"agreement_id: {agreement_id}\n\n{flat}",
@@ -305,32 +402,104 @@ def deliver_free(agreement_id: str, agreement: Dict[str, Any]) -> None:
     save_agreement(agreement)
 
 
-def deliver_premium_pdf(agreement_id: str, agreement: Dict[str, Any], stripe_session_id: Optional[str]) -> None:
+def deliver_premium_oneflow(agreement_id: str, agreement: Dict[str, Any], stripe_session_id: Optional[str]) -> None:
     """
-    Premium: skicka 'signeringsdokument' (PDF) till båda parter.
-    (Oneflow/BankID-signering lägger vi senare.)
+    Premium = Oneflow/BankID:
+    - skapa kontrakt från template (om ej redan finns)
+    - publish => Oneflow skickar signeringsinbjudan
+    - maila båda parter med info (och ev. PDF som fallback om ni vill)
+    """
+    flat = agreement["flat"]
+    lender_email = flat.get("utlanare_epost")
+    borrower_email = flat.get("lantagare_epost")
+
+    # Idempotens: skapa bara en gång
+    if not agreement.get("oneflow_contract_id"):
+        contract = oneflow_create_contract_from_template(agreement)
+        agreement["oneflow_contract_id"] = contract.get("id")
+        agreement["oneflow_contract"] = {
+            "id": contract.get("id"),
+            "name": contract.get("name"),
+        }
+        save_agreement(agreement)
+
+    # Publish bara en gång
+    if not agreement.get("oneflow_published"):
+        # hämta "contract" object att publish:a (vi kan skapa en minimal med id om vi vill)
+        contract_stub = {"id": agreement["oneflow_contract_id"]}
+        try:
+            # Försök publish med endpoint /contracts/{id}/publish
+            oneflow_publish_contract(contract_stub)
+        except OneflowError:
+            # Om publish behöver _links från full contract: skapa om (sällan)
+            # (vi försöker igen genom att skapa ett mer komplett create+publish-flöde)
+            contract = oneflow_create_contract_from_template(agreement)
+            agreement["oneflow_contract_id"] = contract.get("id")
+            save_agreement(agreement)
+            oneflow_publish_contract(contract)
+
+        agreement["oneflow_published"] = True
+        agreement["oneflow_status"] = "published"
+        save_agreement(agreement)
+
+    # Bekräftelsemail (Oneflow skickar signeringslänken separat)
+    text = (
+        "Tack för er betalning.\n\n"
+        "Vi har nu skickat avtalet till Oneflow för signering med BankID.\n"
+        "Ni kommer att få en signeringsinbjudan via e-post från Oneflow.\n\n"
+        "Om ni inte ser mailet: kontrollera skräppost/övrigt.\n\n"
+        "/HP Juridik"
+    )
+
+    ok, err = safe_send_email(
+        [lender_email, borrower_email],
+        "Premium – signering med BankID (Oneflow)",
+        text,
+        pdf_bytes=None,  # vill ni bifoga PDF ändå? sätt pdf_bytes=base64.b64decode(...)
+    )
+    if not ok:
+        raise RuntimeError(err)
+
+    safe_send_email(
+        [LEAD_INBOX],
+        "Lead: Låna bil till skuldsatt (PREMIUM/ONEFLOW)",
+        f"agreement_id: {agreement_id}\nstripe_session_id: {stripe_session_id}\noneflow_contract_id: {agreement.get('oneflow_contract_id')}\n\n{flat}",
+    )
+
+    agreement["is_paid"] = True
+    agreement["delivered"] = True  # delivered = signering initierad
+    agreement["stripe_session_id"] = stripe_session_id
+    save_agreement(agreement)
+
+
+def deliver_premium_pdf_fallback(agreement_id: str, agreement: Dict[str, Any], stripe_session_id: Optional[str]) -> None:
+    """
+    Om Oneflow failar: skicka PDF så att kunden ändå får något.
     """
     flat = agreement["flat"]
     pdf_bytes = base64.b64decode(agreement["pdf_b64"])
     lender_email = flat.get("utlanare_epost")
     borrower_email = flat.get("lantagare_epost")
 
-    send_email(
+    ok, err = safe_send_email(
         [lender_email, borrower_email],
         "Premium – signeringsdokument (PDF)",
         "Tack för er betalning. Här kommer signeringsdokumentet som PDF.\n\n/HP Juridik",
         pdf_bytes=pdf_bytes,
     )
+    if not ok:
+        raise RuntimeError(err)
 
-    send_email(
+    safe_send_email(
         [LEAD_INBOX],
-        "Lead: Låna bil till skuldsatt (PREMIUM)",
+        "Lead: Låna bil till skuldsatt (PREMIUM/PDF FALLBACK)",
         f"agreement_id: {agreement_id}\nstripe_session_id: {stripe_session_id}\n\n{flat}",
     )
 
     agreement["is_paid"] = True
     agreement["delivered"] = True
     agreement["stripe_session_id"] = stripe_session_id
+    agreement["oneflow_status"] = "failed_fallback_pdf"
     save_agreement(agreement)
 
 
@@ -401,17 +570,16 @@ def contact_submit(
         f"User-Agent: {request.headers.get('user-agent','')}\n"
     )
 
-    try:
-        send_email(
-            [CONTACT_TO],
-            subject,
-            body,
-            reply_to=epost or None,
-            from_email=CONTACT_FROM,
-        )
-    except Exception as e:
+    ok, err = safe_send_email(
+        [CONTACT_TO],
+        subject,
+        body,
+        reply_to=epost or None,        # Reply-To = besökarens e-post
+        from_email=CONTACT_FROM,       # From = hp@ om möjligt
+    )
+    if not ok:
         ctx = page_ctx(request, "/", "HP Juridik", "HP Juridik – juridisk rådgivning.")
-        ctx.update({"sent": False, "error": str(e), "free_ok": False, "premium_ok": False})
+        ctx.update({"sent": False, "error": err, "free_ok": False, "premium_ok": False})
         return templates.TemplateResponse("pages/home.html", ctx, status_code=500)
 
     ctx = page_ctx(request, "/", "HP Juridik", "HP Juridik – juridisk rådgivning.")
@@ -430,7 +598,7 @@ def lana_bil_form(request: Request):
         "Låna bil till skuldsatt | HP Juridik",
         "Skapa avtal och välj Gratis eller Premium.",
     )
-    ctx.update({"error": None, "sent_ok": False, "sent_error": None})
+    ctx.update({"error": None})
     return templates.TemplateResponse("pages/lana_bil.html", ctx)
 
 
@@ -457,7 +625,7 @@ def lana_bil_submit(
 ):
     if not disclaimer_accept:
         ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
-        ctx.update({"error": "Du måste godkänna friskrivningen för att fortsätta.", "sent_ok": False, "sent_error": None})
+        ctx.update({"error": "Du måste godkänna friskrivningen för att fortsätta."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
     try:
@@ -465,13 +633,13 @@ def lana_bil_submit(
         to_obj = datetime.fromisoformat(to_dt)
     except ValueError:
         ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
-        ctx.update({"error": "Ogiltigt datum/tid-format.", "sent_ok": False, "sent_error": None})
+        ctx.update({"error": "Ogiltigt datum/tid-format."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
     if to_obj <= from_obj:
         ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa avtal.")
-        ctx.update({"error": "Till (datum & tid) måste vara efter Från.", "sent_ok": False, "sent_error": None})
-        return templates.TemplateResponse("pages/lana_bil.html", ctx)
+        ctx.update({"error": "Till (datum & tid) måste vara efter Från."})
+        return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
     agreement_id = str(uuid.uuid4())
 
@@ -516,6 +684,9 @@ def lana_bil_submit(
         "is_paid": False,
         "stripe_session_id": None,
         "delivered": False,
+        "oneflow_contract_id": None,
+        "oneflow_published": False,
+        "oneflow_status": None,
     }
 
     save_agreement(agreement)
@@ -527,11 +698,11 @@ def lana_bil_submit(
 @app.get("/lana-bil-till-skuldsatt/review", response_class=HTMLResponse)
 def lana_bil_review_get(request: Request):
     agreement_id = request.session.get("agreement_id")
-    agreement = load_agreement(agreement_id) if agreement_id else None
+    agreement = load_agreement(agreement_id)
     if not agreement_id or not agreement:
         return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
 
-    ctx = page_ctx(request, "/lana-bil-till-skuldsatt/review", "Granska uppgifter | HP Juridik", "Granska uppgifter och välj Gratis eller Premium.")
+    ctx = page_ctx(request, "/lana-bil-till-skuldsatt/review", "Granska uppgifter | HP Juridik", "Granska och välj Gratis eller Premium.")
     ctx.update({"agreement_id": agreement_id, "data": agreement["data"], "error": None})
     return templates.TemplateResponse("pages/lana_bil_review.html", ctx)
 
@@ -544,7 +715,7 @@ def lana_bil_review_post(
     disclaimer_accept: Optional[str] = Form(None),
 ):
     agreement_id = request.session.get("agreement_id")
-    agreement = load_agreement(agreement_id) if agreement_id else None
+    agreement = load_agreement(agreement_id)
     if not agreement_id or not agreement:
         return RedirectResponse(url="/lana-bil-till-skuldsatt", status_code=303)
 
@@ -568,13 +739,14 @@ def lana_bil_review_post(
                 {
                     "price_data": {
                         "currency": "sek",
-                        "product_data": {"name": "Premium – Låna bil till skuldsatt"},
+                        "product_data": {"name": "Premium – BankID-signering (Oneflow)"},
                         "unit_amount": PREMIUM_PRICE_ORE,
                     },
                     "quantity": 1,
                 }
             ],
             metadata={"agreement_id": agreement_id},
+            payment_intent_data={"metadata": {"agreement_id": agreement_id}},
             success_url=f"{BASE_URL}/checkout-success?agreement_id={agreement_id}",
             cancel_url=f"{BASE_URL}/checkout-cancel?agreement_id={agreement_id}",
         )
@@ -606,11 +778,7 @@ async def stripe_webhook(request: Request):
         return PlainTextResponse("missing stripe-signature header", status_code=400)
 
     try:
-        event = stripe.Webhook.construct_event(
-            payload=payload,
-            sig_header=sig_header,
-            secret=STRIPE_WEBHOOK_SECRET,
-        )
+        event = stripe.Webhook.construct_event(payload=payload, sig_header=sig_header, secret=STRIPE_WEBHOOK_SECRET)
     except Exception as e:
         print("Stripe verify failed:", repr(e))
         return PlainTextResponse(f"invalid signature: {type(e).__name__}", status_code=400)
@@ -618,11 +786,7 @@ async def stripe_webhook(request: Request):
     event_type = event.get("type")
     print("Stripe event:", event_type)
 
-    # Acceptera både "completed" och async success (vissa betalningar blir inte 'paid' direkt)
-    if event_type not in (
-        "checkout.session.completed",
-        "checkout.session.async_payment_succeeded",
-    ):
+    if event_type not in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
         return PlainTextResponse("ok", status_code=200)
 
     session_obj = event["data"]["object"]
@@ -632,46 +796,23 @@ async def stripe_webhook(request: Request):
     payment_status = session_obj.get("payment_status")
     status = session_obj.get("status")
 
-    print(
-        "checkout session:",
-        "session_id=", session_id,
-        "agreement_id=", agreement_id,
-        "status=", status,
-        "payment_status=", payment_status,
-    )
+    print("checkout session:", "session_id=", session_id, "agreement_id=", agreement_id, "status=", status, "payment_status=", payment_status)
 
-    # Leverera inte förrän Stripe säger PAID (skydd mot att success-sida nås innan betalning är klar)
     if payment_status != "paid":
-        print("Not paid yet -> no delivery. Waiting for async_payment_succeeded. payment_status=", payment_status)
+        print("Not paid yet -> no delivery.")
         return PlainTextResponse("ok", status_code=200)
 
-    # Fallback 1: metadata saknar agreement_id
     if not agreement_id:
-        ok, err = safe_send_email(
-            [LEAD_INBOX],
-            "Stripe ALERT: saknar agreement_id",
-            f"session_id={session_id}\nstatus={status}\npayment_status={payment_status}\nmetadata={metadata}",
-        )
+        ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: saknar agreement_id", f"session_id={session_id}\nmetadata={metadata}")
         if not ok:
             print("ALERT email failed:", err)
         return PlainTextResponse("ok", status_code=200)
 
     agreement = load_agreement(agreement_id)
-
-    # Fallback 2: agreement saknas på disk
     if not agreement:
-        msg = (
-            "Stripe PAID men agreement saknas i persistens.\n\n"
-            f"agreement_id={agreement_id}\n"
-            f"session_id={session_id}\n"
-            f"status={status}\n"
-            f"payment_status={payment_status}\n"
-            f"metadata={metadata}\n"
-        )
+        msg = f"Stripe PAID men agreement saknas.\nagreement_id={agreement_id}\nsession_id={session_id}\nmetadata={metadata}"
         print("WARNING:", msg)
-        ok, err = safe_send_email([LEAD_INBOX], "Stripe ALERT: agreement saknas (persistens)", msg)
-        if not ok:
-            print("ALERT email failed:", err)
+        safe_send_email([LEAD_INBOX], "Stripe ALERT: agreement saknas (persistens)", msg)
         return PlainTextResponse("ok", status_code=200)
 
     # Idempotens
@@ -679,20 +820,71 @@ async def stripe_webhook(request: Request):
         print("Already delivered:", agreement_id)
         return PlainTextResponse("ok", status_code=200)
 
-    # Leverera PDF till båda parter
+    agreement["stripe_session_id"] = agreement.get("stripe_session_id") or session_id
+    agreement["is_paid"] = True
+    save_agreement(agreement)
+
+    # Premium: Oneflow först, annars PDF fallback
     try:
-        deliver_premium_pdf(agreement_id, agreement, stripe_session_id=session_id)
-        print("Premium delivered OK:", agreement_id)
+        if ONEFLOW_ENABLED:
+            deliver_premium_oneflow(agreement_id, agreement, stripe_session_id=session_id)
+            print("Premium Oneflow delivered OK:", agreement_id)
+        else:
+            # Om Oneflow inte är konfiggat än -> premium pdf
+            deliver_premium_pdf_fallback(agreement_id, agreement, stripe_session_id=session_id)
+            print("Premium PDF delivered (no Oneflow):", agreement_id)
+
     except Exception as e:
         err_txt = f"Premium delivery failed agreement_id={agreement_id} session_id={session_id}: {e}"
         print(err_txt)
-        ok, err2 = safe_send_email([LEAD_INBOX], "SMTP/Delivery ERROR i Stripe webhook", err_txt)
-        if not ok:
-            print("Could not send error email:", err2)
-        # 500 => Stripe retry (bra om SMTP var tillfälligt nere)
+        safe_send_email([LEAD_INBOX], "Delivery ERROR i Stripe webhook", err_txt)
         return PlainTextResponse("delivery error", status_code=500)
 
     return PlainTextResponse("ok", status_code=200)
+
+
+# ------------------------------------------------------------------------------
+# Oneflow webhook (du skapar den senare i Oneflow UI)
+# ------------------------------------------------------------------------------
+@app.post("/oneflow/webhook")
+async def oneflow_webhook(request: Request):
+    """
+    När du skapat webhook i Oneflow kommer events hit.
+    Vi loggar och uppdaterar status om vi kan hitta agreement via oneflow_contract_id.
+    """
+    raw = await request.body()
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return PlainTextResponse("invalid json", status_code=400)
+
+    # TODO: verifiera signatur med ONEFLOW_WEBHOOK_SECRET om du vill
+    # (Oneflow skickar signatur-header beroende på webhook-typ/inställning)
+
+    event_type = payload.get("event") or payload.get("type") or "unknown"
+    contract_id = payload.get("contract_id") or payload.get("contract", {}).get("id")
+
+    print("=== ONEFLOW WEBHOOK ===", utc_iso(), "event=", event_type, "contract_id=", contract_id)
+
+    # Hitta agreement genom att skanna filer (MVP)
+    if contract_id:
+        _ensure_dir(AGREEMENTS_DIR)
+        for fn in os.listdir(AGREEMENTS_DIR):
+            if not fn.endswith(".json"):
+                continue
+            p = os.path.join(AGREEMENTS_DIR, fn)
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    ag = json.load(f)
+                if str(ag.get("oneflow_contract_id")) == str(contract_id):
+                    ag["oneflow_status"] = event_type
+                    save_agreement(ag)
+                    break
+            except Exception:
+                continue
+
+    return PlainTextResponse("ok", status_code=200)
+
 
 # ------------------------------------------------------------------------------
 # Checkout pages (leverans sker via webhook)
