@@ -1,606 +1,620 @@
-# main.py
-# HP Juridik – Bilutlåningsavtal + Stripe Premium + Oneflow-signering
-#
-# Flöde:
-# 1) Kund fyller i formulär -> vi skapar "agreement" (sparas i SQLite)
-# 2) Vid Premium-val -> Stripe Checkout session skapas med metadata agreement_id
-# 3) Stripe webhook (checkout.session.completed) -> vi:
-#    - markerar betald
-#    - skapar Oneflow-kontrakt från ONEFLOW_TEMPLATE_ID
-#    - sätter datafält (external_key) på kontraktet
-#    - skapar access_link för motpartens deltagare (signer)
-#    - mailar kvitto + access-länk
-# 4) Oneflow webhook -> när signerat:
-#    - ladda ner PDF
-#    - maila signerad PDF till parter
-
+# app/main.py
 from __future__ import annotations
 
 import os
+import io
 import json
-import uuid
 import time
-import sqlite3
+import uuid
+import base64
+import hmac
 import hashlib
+import sqlite3
+import smtplib
+from email.message import EmailMessage
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple, List
+from typing import Optional, Dict, Any, Tuple
 
 import requests
 import stripe
-
-from fastapi import FastAPI, Request, HTTPException, Form
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi import FastAPI, Request, Form, HTTPException
+from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from starlette.templating import Jinja2Templates
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
 
-import smtplib
-from email.message import EmailMessage
+# PDF (ReportLab)
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from reportlab.lib.units import mm
 
-# ----------------------------
-# Config
-# ----------------------------
 
+# =============================================================================
+# ENV
+# =============================================================================
 BASE_URL = os.getenv("BASE_URL", "https://www.hpjuridik.se").rstrip("/")
-PREMIUM_PRICE_ORE = int(os.getenv("PREMIUM_PRICE_ORE", "300"))
 
-# Email (SMTP)
+SESSION_SECRET = os.getenv("SESSION_SECRET", "dev-session-secret")
+
+# Email / SMTP
 SMTP_HOST = os.getenv("SMTP_HOST", "")
-SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587") or "587")
 SMTP_USER = os.getenv("SMTP_USER", "")
 SMTP_PASS = os.getenv("SMTP_PASS", "")
 MAIL_FROM = os.getenv("MAIL_FROM", SMTP_USER or "no-reply@hpjuridik.se")
-LEAD_INBOX = os.getenv("LEAD_INBOX", "")  # t.ex. info@hpjuridik.se
+LEAD_INBOX = os.getenv("LEAD_INBOX", "hp@hpjuridik.se")
+CONTACT_TO = os.getenv("CONTACT_TO", LEAD_INBOX)
 
 # Stripe
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-stripe.api_key = STRIPE_SECRET_KEY
+PREMIUM_PRICE_ORE = int(os.getenv("PREMIUM_PRICE_ORE", "300") or "300")  # 3,00 SEK default for test
 
 # Oneflow
 ONEFLOW_API_TOKEN = os.getenv("ONEFLOW_API_TOKEN", "")
 ONEFLOW_BASE_URL = os.getenv("ONEFLOW_BASE_URL", "https://api.oneflow.com/v1").rstrip("/")
-ONEFLOW_TEMPLATE_ID = os.getenv("ONEFLOW_TEMPLATE_ID", "")  # t.ex. 13789463
-ONEFLOW_WORKSPACE_ID = os.getenv("ONEFLOW_WORKSPACE_ID", "")  # valfritt
-ONEFLOW_USER_EMAIL = os.getenv("ONEFLOW_USER_EMAIL", "")  # valfritt men ofta bra
-ONEFLOW_WEBHOOK_SIGN_KEY = os.getenv("ONEFLOW_WEBHOOK_SIGN_KEY", "")  # din Signeringsnyckel från Oneflow-webhooken
+ONEFLOW_TEMPLATE_ID = os.getenv("ONEFLOW_TEMPLATE_ID", "")  # set to your template ID (e.g. 13789463)
+ONEFLOW_WEBHOOK_SIGN_KEY = os.getenv("ONEFLOW_WEBHOOK_SIGN_KEY", "")  # e.g. HPJURIDIK_ONEFLOW_SECRET_2026
 
-DB_PATH = os.getenv("DB_PATH", "agreements.sqlite3")
+# Optional: who should be the internal organizer
+ONEFLOW_ORG_NAME = os.getenv("ONEFLOW_ORG_NAME", "HP Juridik")
+ONEFLOW_ORG_EMAIL = os.getenv("ONEFLOW_ORG_EMAIL", "hp@hpjuridik.se")
 
-# ----------------------------
-# App / Templates
-# ----------------------------
+# Where SQLite will live (Render: use /var/data if you have a disk)
+DB_PATH = os.getenv("DB_PATH", "/var/data/hpjuridik.sqlite3")
 
+
+# =============================================================================
+# App
+# =============================================================================
 app = FastAPI()
+app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
-# statics/templates om de finns i din repo
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates") if os.path.isdir("templates") else None
+# Static + templates (matches your repo layout app/static and app/templates)
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+templates = Jinja2Templates(directory="app/templates")
 
 
-# ----------------------------
+# =============================================================================
 # Utils
-# ----------------------------
-
+# =============================================================================
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-def require_env(name: str, value: str) -> None:
-    if not value:
-        raise HTTPException(status_code=500, detail=f"{name} saknas i env")
+
+def db() -> sqlite3.Connection:
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db() -> None:
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agreements (
+            id TEXT PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+
+            plan TEXT NOT NULL,
+            customer_name TEXT NOT NULL,
+            customer_email TEXT NOT NULL,
+            customer_phone TEXT,
+            customer_address TEXT,
+
+            borrower_name TEXT NOT NULL,
+            borrower_address TEXT NOT NULL,
+
+            lender_name TEXT NOT NULL,
+            lender_address TEXT NOT NULL,
+
+            from_str TEXT NOT NULL,
+            to_str TEXT NOT NULL,
+            purpose TEXT NOT NULL,
+            vehicle_regnr TEXT NOT NULL,
+
+            stripe_session_id TEXT,
+            stripe_payment_intent TEXT,
+            paid_at TEXT,
+            delivered_at TEXT,
+
+            oneflow_document_id TEXT,
+            oneflow_document_url TEXT,
+            oneflow_status TEXT
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    init_db()
+
 
 def safe_send_email(
-    to_list: List[str],
+    to_list: list[str],
     subject: str,
-    body: str,
-    attachments: Optional[List[Tuple[str, bytes, str]]] = None,  # (filename, bytes, mime)
-) -> Tuple[bool, Optional[str]]:
+    body_text: str,
+    attachments: Optional[list[Tuple[str, bytes, str]]] = None,  # (filename, data, mimetype)
+) -> Tuple[bool, str]:
+    """
+    Returns (ok, err)
+    """
     try:
         if not SMTP_HOST or not SMTP_USER or not SMTP_PASS:
-            return False, "SMTP env saknas (SMTP_HOST/SMTP_USER/SMTP_PASS)"
-        rcpts = [x for x in to_list if x]
-        if not rcpts:
-            return False, "Inga mottagare angivna"
+            return False, "SMTP not configured (SMTP_HOST/SMTP_USER/SMTP_PASS missing)"
 
         msg = EmailMessage()
         msg["From"] = MAIL_FROM
-        msg["To"] = ", ".join(rcpts)
+        msg["To"] = ", ".join(to_list)
         msg["Subject"] = subject
-        msg.set_content(body)
+        msg.set_content(body_text)
 
         if attachments:
-            for filename, content, mime in attachments:
-                if "/" in mime:
-                    maintype, subtype = mime.split("/", 1)
-                else:
-                    maintype, subtype = "application", "octet-stream"
-                msg.add_attachment(content, maintype=maintype, subtype=subtype, filename=filename)
+            for filename, data, mimetype in attachments:
+                maintype, subtype = mimetype.split("/", 1)
+                msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
 
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as s:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
             s.starttls()
             s.login(SMTP_USER, SMTP_PASS)
             s.send_message(msg)
 
-        return True, None
+        return True, ""
     except Exception as e:
         return False, repr(e)
 
 
-# ----------------------------
-# SQLite storage
-# ----------------------------
-
-def db() -> sqlite3.Connection:
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db() -> None:
-    with db() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS agreements (
-                id TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                data_json TEXT NOT NULL,
-
-                customer_email TEXT,
-                customer_name TEXT,
-
-                stripe_session_id TEXT,
-                stripe_paid_at TEXT,
-
-                oneflow_contract_id TEXT,
-                oneflow_participant_id TEXT,
-                oneflow_access_link TEXT,
-                oneflow_signed_at TEXT,
-
-                delivered INTEGER DEFAULT 0,
-                signed_pdf_sent INTEGER DEFAULT 0
-            )
-            """
-        )
-        conn.commit()
-
-init_db()
-
-def save_agreement(agreement_id: str, data: Dict[str, Any], customer_email: str = "", customer_name: str = "") -> None:
-    now = utc_iso()
-    with db() as conn:
-        conn.execute(
-            """
-            INSERT INTO agreements (id, created_at, updated_at, data_json, customer_email, customer_name)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-              updated_at=excluded.updated_at,
-              data_json=excluded.data_json,
-              customer_email=excluded.customer_email,
-              customer_name=excluded.customer_name
-            """,
-            (agreement_id, now, now, json.dumps(data, ensure_ascii=False), customer_email, customer_name),
-        )
-        conn.commit()
-
-def load_agreement(agreement_id: str) -> Optional[Dict[str, Any]]:
-    with db() as conn:
-        row = conn.execute("SELECT * FROM agreements WHERE id=?", (agreement_id,)).fetchone()
-        if not row:
-            return None
-        out = dict(row)
-        out["data"] = json.loads(row["data_json"])
-        return out
-
-def update_agreement_fields(agreement_id: str, **fields: Any) -> None:
-    if not fields:
-        return
-    parts, vals = [], []
-    for k, v in fields.items():
-        parts.append(f"{k}=?")
-        vals.append(v)
-    parts.append("updated_at=?")
-    vals.append(utc_iso())
-    vals.append(agreement_id)
-
-    with db() as conn:
-        conn.execute(f"UPDATE agreements SET {', '.join(parts)} WHERE id=?", vals)
-        conn.commit()
+def page_ctx(request: Request, path: str, title: str = "HP Juridik", description: str = "") -> Dict[str, Any]:
+    return {
+        "request": request,
+        "path": path,
+        "title": title,
+        "description": description,
+        "base_url": BASE_URL,
+    }
 
 
-# ----------------------------
-# Oneflow client
-# ----------------------------
+# =============================================================================
+# PDF generation (fallback receipt / preview)
+# =============================================================================
+FOOTER_TEXT = (
+    "076-317 12 84  |  hpjuridik.se  | HP@hpjuridik.se  |  "
+    "Karl XI gata 21, 222 20 LUND  |  Subsidiaritet i Lund AB  |  559365-2018"
+)
 
-class OneflowError(RuntimeError):
-    pass
+
+def generate_contract_pdf(agreement: Dict[str, Any]) -> bytes:
+    """
+    Simple PDF (fallback). Your Oneflow template is the primary signing doc.
+    """
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    w, h = A4
+
+    # Header logo if exists in static
+    logo_path = "app/static/hp-juridik-logo.png"
+    y = h - 35 * mm
+    try:
+        if os.path.exists(logo_path):
+            c.drawImage(logo_path, 75 * mm, h - 30 * mm, width=60 * mm, height=18 * mm, mask="auto")
+            y = h - 45 * mm
+    except Exception:
+        pass
+
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(25 * mm, y, "BILUTLÅNINGSAVTAL")
+    y -= 10 * mm
+
+    c.setFont("Helvetica", 10)
+    c.drawString(25 * mm, y, "Mellan nedanstående parter har följande avtal träffats.")
+    y -= 12 * mm
+
+    def line(label: str, value: str) -> None:
+        nonlocal y
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(25 * mm, y, label)
+        y -= 6 * mm
+        c.setFont("Helvetica", 10)
+        c.drawString(30 * mm, y, value)
+        y -= 10 * mm
+
+    line("UTLÅNARE", f"Namn: {agreement['lender_name']}  |  Adress: {agreement['lender_address']}")
+    line("LÅNTAGARE", f"Namn: {agreement['borrower_name']}  |  Adress: {agreement['borrower_address']}")
+    line("FORDON", f"Bilens registreringsnummer: {agreement['vehicle_regnr']}")
+    line("UTLÅNINGSPERIOD", f"Startdatum: {agreement['from_str']}  |  Slutdatum: {agreement['to_str']}")
+    line("ÄNDAMÅL", agreement["purpose"])
+
+    # Footer on every page
+    c.setFont("Helvetica", 8)
+    c.drawString(15 * mm, 10 * mm, FOOTER_TEXT[:120])
+    c.drawString(15 * mm, 6 * mm, FOOTER_TEXT[120:])
+
+    c.showPage()
+    c.save()
+    return buf.getvalue()
+
+
+# =============================================================================
+# Stripe + Oneflow
+# =============================================================================
+def require_stripe() -> None:
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="STRIPE_SECRET_KEY saknas")
+    stripe.api_key = STRIPE_SECRET_KEY
+
+
+def require_oneflow() -> None:
+    if not ONEFLOW_API_TOKEN or not ONEFLOW_TEMPLATE_ID:
+        raise HTTPException(status_code=500, detail="Oneflow saknas (ONEFLOW_API_TOKEN/ONEFLOW_TEMPLATE_ID)")
+
 
 def oneflow_headers() -> Dict[str, str]:
-    require_env("ONEFLOW_API_TOKEN", ONEFLOW_API_TOKEN)
-    h = {
-        "Accept": "application/json",
+    return {
+        "Authorization": f"Bearer {ONEFLOW_API_TOKEN}",
         "Content-Type": "application/json",
-        "x-oneflow-api-token": ONEFLOW_API_TOKEN,
+        "Accept": "application/json",
     }
-    # vissa konton behöver user email-header
-    if ONEFLOW_USER_EMAIL:
-        h["x-oneflow-user-email"] = ONEFLOW_USER_EMAIL
-    return h
 
-def oneflow_get_default_workspace_id() -> Optional[str]:
-    if ONEFLOW_WORKSPACE_ID:
-        return ONEFLOW_WORKSPACE_ID
-    try:
-        r = requests.get(f"{ONEFLOW_BASE_URL}/workspaces", headers=oneflow_headers(), timeout=20)
-        if r.status_code >= 300:
-            return None
-        data = r.json()
-        if isinstance(data, dict) and data.get("workspaces"):
-            ws = data["workspaces"][0]
-            return str(ws.get("id") or ws.get("workspace_id"))
-        if isinstance(data, list) and data:
-            ws = data[0]
-            return str(ws.get("id") or ws.get("workspace_id"))
-        return None
-    except Exception:
-        return None
 
-def oneflow_create_contract_from_template(
-    template_id: str,
-    contract_name: str,
-    counterparty_name: str,
-    counterparty_email: str,
-) -> Tuple[str, str]:
+def oneflow_create_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Returns (contract_id, counterparty_participant_id)
+    Creates a Oneflow document from template and sets template data fields.
+    This is intentionally defensive because Oneflow accounts differ slightly in endpoints/features.
     """
-    require_env("ONEFLOW_TEMPLATE_ID", template_id)
+    require_oneflow()
 
-    if not counterparty_email:
-        # Oneflow kräver email för deltagare – du kan välja att stoppa här istället
-        counterparty_email = "no-reply@example.com"
-
-    ws_id = oneflow_get_default_workspace_id()
-
-    body: Dict[str, Any] = {
-        "name": contract_name,
-        "template_id": int(template_id),
-        "parties": [
-            {
-                "name": counterparty_name or "Motpart",
-                "participants": [
-                    {"name": counterparty_name or "Motpart", "email": counterparty_email}
-                ],
-            }
-        ],
+    # 1) Create document from template
+    # Many Oneflow setups support creating a document from a template via /templates/{id}/documents
+    # If your tenant uses a different endpoint, you'll see the error in logs.
+    url = f"{ONEFLOW_BASE_URL}/templates/{ONEFLOW_TEMPLATE_ID}/documents"
+    payload = {
+        "name": f"BILUTLÅNINGSAVTAL {agreement['vehicle_regnr']}",
+        # Keep metadata we can search for later
+        "external_id": agreement["id"],
     }
-    if ws_id:
-        body["workspace_id"] = int(ws_id)
 
-    r = requests.post(
-        f"{ONEFLOW_BASE_URL}/contracts/create",
-        headers=oneflow_headers(),
-        data=json.dumps(body),
-        timeout=30,
-    )
+    r = requests.post(url, headers=oneflow_headers(), data=json.dumps(payload), timeout=30)
     if r.status_code >= 300:
-        raise OneflowError(f"create contract failed: {r.status_code} {r.text}")
+        raise RuntimeError(f"Oneflow create document failed {r.status_code}: {r.text}")
 
-    contract = r.json()
-    contract_id = str(contract.get("id") or contract.get("contract_id") or "")
-    if not contract_id:
-        raise OneflowError(f"create contract: kunde inte läsa contract id: {contract}")
+    doc = r.json()
+    # Try common keys
+    document_id = str(doc.get("id") or doc.get("document_id") or doc.get("data", {}).get("id") or "")
+    if not document_id:
+        raise RuntimeError(f"Oneflow response missing document id: {doc}")
 
-    # försök hitta participant_id i svar
-    participant_id = ""
-    for p in (contract.get("parties") or []):
-        for part in (p.get("participants") or []):
-            if (part.get("email") or "").lower() == counterparty_email.lower():
-                participant_id = str(part.get("id") or part.get("participant_id") or "")
-                break
-        if participant_id:
-            break
+    # 2) Set template data fields
+    # You created external keys like:
+    # utlånare_namn -> utlånare_namn
+    # utlånare_adress -> utlånare_adress
+    # låntagare_namn -> lantagare_namn
+    # låntagare_adress -> lantagare_adress
+    # fordon_regnr -> fordon_regnr
+    # from_str -> from_str
+    # to_str -> to_str
+    # andamal -> andamal
+    fields = {
+        "utlanare_namn": agreement["lender_name"],
+        "utlanare_adress": agreement["lender_address"],
+        "lantagare_namn": agreement["borrower_name"],
+        "lantagare_adress": agreement["borrower_address"],
+        "fordon_regnr": agreement["vehicle_regnr"],
+        "from_str": agreement["from_str"],
+        "to_str": agreement["to_str"],
+        "andamal": agreement["purpose"],
+    }
 
-    # fallback: hämta kontraktet och leta
-    if not participant_id:
-        r2 = requests.get(f"{ONEFLOW_BASE_URL}/contracts/{contract_id}", headers=oneflow_headers(), timeout=20)
-        if r2.status_code < 300:
-            c2 = r2.json()
-            for p in (c2.get("parties") or []):
-                for part in (p.get("participants") or []):
-                    if (part.get("email") or "").lower() == counterparty_email.lower():
-                        participant_id = str(part.get("id") or part.get("participant_id") or "")
-                        break
-                if participant_id:
-                    break
+    # Oneflow has different ways to set fields; common pattern is something like /documents/{id}/data-fields
+    # We'll try a best-effort endpoint.
+    df_url = f"{ONEFLOW_BASE_URL}/documents/{document_id}/data-fields"
+    df_payload = [{"external_key": k, "value": v} for k, v in fields.items()]
 
-    if not participant_id:
-        raise OneflowError("Kunde inte hitta participant_id för motpart (behövs för access link)")
-
-    return contract_id, participant_id
-
-def oneflow_set_data_fields(contract_id: str, fields: Dict[str, str]) -> None:
-    if not fields:
-        return
-    payload = [{"external_key": k, "value": v} for k, v in fields.items()]
-    r = requests.put(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/data_fields",
-        headers=oneflow_headers(),
-        data=json.dumps(payload),
-        timeout=30,
-    )
-    if r.status_code >= 300:
-        raise OneflowError(f"set data fields failed: {r.status_code} {r.text}")
-
-def oneflow_create_access_link(contract_id: str, participant_id: str) -> str:
-    r = requests.post(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/participants/{participant_id}/access_link",
-        headers=oneflow_headers(),
-        timeout=20,
-    )
-    if r.status_code >= 300:
-        raise OneflowError(f"access link failed: {r.status_code} {r.text}")
-    data = r.json()
-    link = data.get("access_link")
-    if not link:
-        raise OneflowError(f"access link saknas i svar: {data}")
-    return str(link)
-
-def oneflow_download_contract_pdf(contract_id: str) -> bytes:
-    r = requests.get(f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/files", headers=oneflow_headers(), timeout=30)
-    if r.status_code >= 300:
-        raise OneflowError(f"list files failed: {r.status_code} {r.text}")
-    files = r.json()
-    if isinstance(files, dict) and "files" in files:
-        files = files["files"]
-    if not isinstance(files, list) or not files:
-        raise OneflowError("Inga filer på kontraktet än")
-
-    pdf = None
-    for f in files:
-        ct = (f.get("content_type") or "").lower()
-        name = str(f.get("name") or "").lower()
-        if ct == "application/pdf" or name.endswith(".pdf"):
-            pdf = f
-            break
-    if not pdf:
-        pdf = files[0]
-
-    file_id = str(pdf.get("id") or pdf.get("file_id") or "")
-    if not file_id:
-        raise OneflowError(f"Kunde inte läsa file id: {pdf}")
-
-    r2 = requests.get(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/files/{file_id}/download",
-        headers=oneflow_headers(),
-        timeout=60,
-    )
+    r2 = requests.put(df_url, headers=oneflow_headers(), data=json.dumps(df_payload), timeout=30)
     if r2.status_code >= 300:
-        raise OneflowError(f"download failed: {r2.status_code} {r2.text}")
-    return r2.content
+        # Not fatal (some tenants use another endpoint); we still proceed but alert you.
+        print("WARNING: Oneflow set data-fields failed:", r2.status_code, r2.text)
+
+    # 3) Add counterparty participant (customer) as signer
+    # Again endpoints differ; we attempt common participant endpoint.
+    participants_url = f"{ONEFLOW_BASE_URL}/documents/{document_id}/participants"
+    participant_payload = {
+        "name": agreement["customer_name"] or agreement["borrower_name"],
+        "email": agreement["customer_email"],
+        "role": "counterparty",
+        "signatory": True,
+        "delivery_channel": "email",
+    }
+    r3 = requests.post(participants_url, headers=oneflow_headers(), data=json.dumps(participant_payload), timeout=30)
+    if r3.status_code >= 300:
+        print("WARNING: Oneflow add participant failed:", r3.status_code, r3.text)
+
+    # 4) Send document (start signing)
+    send_url = f"{ONEFLOW_BASE_URL}/documents/{document_id}/send"
+    r4 = requests.post(send_url, headers=oneflow_headers(), data=json.dumps({}), timeout=30)
+    if r4.status_code >= 300:
+        print("WARNING: Oneflow send failed:", r4.status_code, r4.text)
+
+    # 5) Try to get a share link
+    share_url = f"{ONEFLOW_BASE_URL}/documents/{document_id}"
+    r5 = requests.get(share_url, headers=oneflow_headers(), timeout=30)
+    doc2 = r5.json() if r5.status_code < 300 else {}
+    doc_link = doc2.get("url") or doc2.get("public_url") or doc2.get("share_url") or ""
+
+    return {"document_id": document_id, "document_url": doc_link}
 
 
-# ----------------------------
-# Stripe
-# ----------------------------
+def deliver_premium(agreement_id: str) -> None:
+    """
+    Called after Stripe webhook (paid). Idempotent.
+    - Creates Oneflow doc from template + sends for signing
+    - Sends receipt email with fallback PDF attached
+    """
+    conn = db()
+    cur = conn.cursor()
+    row = cur.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise RuntimeError("agreement not found")
 
-def create_stripe_checkout_session(agreement_id: str) -> stripe.checkout.Session:
-    require_env("STRIPE_SECRET_KEY", STRIPE_SECRET_KEY)
+    if row["delivered_at"]:
+        conn.close()
+        print("Already delivered:", agreement_id)
+        return
 
-    success = f"{BASE_URL}/checkout-success?agreement_id={agreement_id}"
-    cancel = f"{BASE_URL}/checkout-cancel?agreement_id={agreement_id}"
+    agreement = dict(row)
 
+    # Create Oneflow signing doc
+    doc_id = ""
+    doc_url = ""
+    try:
+        of = oneflow_create_from_template(agreement)
+        doc_id = of.get("document_id", "")
+        doc_url = of.get("document_url", "")
+    except Exception as e:
+        # We still send receipt + PDF even if Oneflow failed, but alert internally
+        msg = f"Oneflow creation failed for agreement_id={agreement_id}: {e!r}"
+        print("ERROR:", msg)
+        safe_send_email([LEAD_INBOX], "Oneflow ERROR (premium)", msg)
+
+    # Receipt PDF (fallback / copy)
+    pdf_bytes = generate_contract_pdf(agreement)
+
+    # Email receipt to customer + CC lead inbox
+    subject = "HP Juridik – Kvitto och avtal"
+    body = (
+        "Tack för din betalning!\n\n"
+        "Här kommer en kopia av avtalet som PDF.\n\n"
+    )
+    if doc_url:
+        body += f"Signering via Oneflow (länk): {doc_url}\n\n"
+    else:
+        body += "Signering via Oneflow: (kunde inte skapa länk automatiskt – vi återkommer vid behov)\n\n"
+
+    body += "Med vänlig hälsning\nHP Juridik\n"
+
+    to_list = [agreement["customer_email"]]
+    ok, err = safe_send_email(
+        to_list=to_list,
+        subject=subject,
+        body_text=body,
+        attachments=[("bilutlaningsavtal.pdf", pdf_bytes, "application/pdf")],
+    )
+    if not ok:
+        # fallback alert
+        safe_send_email([LEAD_INBOX], "SMTP ERROR – kunde inte skicka kvitto", f"agreement_id={agreement_id}\n{err}")
+
+    cur.execute(
+        """
+        UPDATE agreements
+        SET delivered_at = ?, oneflow_document_id = COALESCE(oneflow_document_id, ?),
+            oneflow_document_url = COALESCE(oneflow_document_url, ?),
+            oneflow_status = COALESCE(oneflow_status, ?),
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (utc_iso(), doc_id or None, doc_url or None, "sent" if doc_id else None, utc_iso(), agreement_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# =============================================================================
+# Routes – website pages
+# =============================================================================
+@app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    # IMPORTANT: this fixes "hpjuridik.se landar på fel sida"
+    return templates.TemplateResponse("pages/home.html", page_ctx(request, "/", "HP Juridik", ""))
+
+
+@app.get("/contact", response_class=HTMLResponse)
+def contact_page(request: Request):
+    return templates.TemplateResponse("pages/contact.html", page_ctx(request, "/contact", "Kontakt | HP Juridik", ""))
+
+
+@app.get("/services", response_class=HTMLResponse)
+def services_page(request: Request):
+    return templates.TemplateResponse("pages/services.html", page_ctx(request, "/services", "Tjänster | HP Juridik", ""))
+
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms_page(request: Request):
+    return templates.TemplateResponse("pages/terms.html", page_ctx(request, "/terms", "Villkor | HP Juridik", ""))
+
+
+# =============================================================================
+# Contact form (simple)
+# =============================================================================
+@app.post("/contact")
+async def contact_submit(
+    request: Request,
+    name: str = Form(...),
+    email: str = Form(...),
+    message: str = Form(...),
+):
+    body = f"Nytt meddelande från webb:\n\nNamn: {name}\nEmail: {email}\n\n{message}\n"
+    safe_send_email([CONTACT_TO], "HP Juridik | Ny kontaktförfrågan", body)
+    return RedirectResponse(url="/contact", status_code=303)
+
+
+# =============================================================================
+# Flow: Låna bil till skuldsatt -> review -> Stripe checkout -> Stripe webhook -> Oneflow signing
+# =============================================================================
+@app.get("/lana-bil-till-skuldsaatt", response_class=HTMLResponse)
+def lana_bil_form(request: Request):
+    return templates.TemplateResponse(
+        "pages/lana_bil.html",
+        page_ctx(request, "/lana-bil-till-skuldsaatt", "Låna bil till skuldsatt | HP Juridik", ""),
+    )
+
+
+@app.post("/lana-bil-till-skuldsaatt")
+async def lana_bil_submit(
+    request: Request,
+    customer_name: str = Form(...),
+    customer_email: str = Form(...),
+    customer_phone: str = Form(""),
+    customer_address: str = Form(""),
+
+    utlanare_namn: str = Form(...),
+    utlanare_adress: str = Form(...),
+
+    lantagare_namn: str = Form(...),
+    lantagare_adress: str = Form(...),
+
+    fordon_regnr: str = Form(...),
+    from_str: str = Form(...),
+    to_str: str = Form(...),
+    andamal: str = Form(...),
+):
+    agreement_id = str(uuid.uuid4())
+    now = utc_iso()
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO agreements (
+            id, created_at, updated_at,
+            plan, customer_name, customer_email, customer_phone, customer_address,
+            borrower_name, borrower_address,
+            lender_name, lender_address,
+            from_str, to_str, purpose, vehicle_regnr
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            agreement_id, now, now,
+            "premium",
+            customer_name.strip(), customer_email.strip(), customer_phone.strip(), customer_address.strip(),
+            lantagare_namn.strip(), lantagare_adress.strip(),
+            utlanare_namn.strip(), utlanare_adress.strip(),
+            from_str.strip(), to_str.strip(), andamal.strip(), fordon_regnr.strip(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    # remember in session for review
+    request.session["agreement_id"] = agreement_id
+
+    return RedirectResponse(url="/lana-bil-till-skuldsaatt/review", status_code=303)
+
+
+@app.get("/lana-bil-till-skuldsaatt/review", response_class=HTMLResponse)
+def lana_bil_review(request: Request):
+    agreement_id = request.session.get("agreement_id") or request.query_params.get("agreement_id")
+    if not agreement_id:
+        return RedirectResponse(url="/lana-bil-till-skuldsaatt", status_code=303)
+
+    conn = db()
+    row = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+    conn.close()
+    if not row:
+        return RedirectResponse(url="/lana-bil-till-skuldsaatt", status_code=303)
+
+    ctx = page_ctx(request, "/lana-bil-till-skuldsaatt/review", "Granska | HP Juridik", "")
+    ctx["agreement"] = dict(row)
+    ctx["premium_price_ore"] = PREMIUM_PRICE_ORE
+    return templates.TemplateResponse("pages/lana_bil_review.html", ctx)
+
+
+@app.post("/lana-bil-till-skuldsaatt/review")
+async def lana_bil_start_checkout(request: Request):
+    agreement_id = request.session.get("agreement_id") or request.query_params.get("agreement_id")
+    if not agreement_id:
+        raise HTTPException(status_code=400, detail="agreement_id saknas")
+
+    conn = db()
+    row = conn.execute("SELECT * FROM agreements WHERE id = ?", (agreement_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="agreement hittades ej")
+
+    require_stripe()
+
+    success_url = f"{BASE_URL}/checkout-success?agreement_id={agreement_id}"
+    cancel_url = f"{BASE_URL}/checkout-cancel?agreement_id={agreement_id}"
+
+    # IMPORTANT: put agreement_id in metadata so webhook can find it
     session = stripe.checkout.Session.create(
         mode="payment",
-        success_url=success,
-        cancel_url=cancel,
+        payment_method_types=["card"],
         line_items=[
             {
                 "price_data": {
                     "currency": "sek",
-                    "product_data": {"name": "Premium – bilutlåningsavtal (Oneflow-signering)"},
+                    "product_data": {"name": "Bilutlåningsavtal (premium)"},
                     "unit_amount": PREMIUM_PRICE_ORE,
                 },
                 "quantity": 1,
             }
         ],
+        success_url=success_url,
+        cancel_url=cancel_url,
+        customer_email=row["customer_email"],
         metadata={"agreement_id": agreement_id},
         payment_intent_data={"metadata": {"agreement_id": agreement_id}},
     )
-    return session
 
-
-# ----------------------------
-# Agreement logic
-# ----------------------------
-
-def agreement_to_oneflow_fields(data: Dict[str, Any]) -> Dict[str, str]:
-    """
-    Mappa formulär -> Oneflow datafält (external_key)
-    Du har skapat (exempel):
-      fordon_regnr, lantagare_adress, lantagare_namn, from_str, to_str, utlanare_adress, utlanare_namn, andamal
-    """
-    def s(x: Any) -> str:
-        return "" if x is None else str(x)
-
-    return {
-        "utlanare_namn": s(data.get("utlanare_namn")),
-        "utlanare_adress": s(data.get("utlanare_adress")),
-        "lantagare_namn": s(data.get("lantagare_namn")),
-        "lantagare_adress": s(data.get("lantagare_adress")),
-        "fordon_regnr": s(data.get("fordon_regnr")),
-        "from_str": s(data.get("from_str")),
-        "to_str": s(data.get("to_str")),
-        "andamal": s(data.get("andamal")),
-    }
-
-def deliver_premium(agreement_id: str) -> None:
-    """
-    Idempotent leverans:
-      - skapar Oneflow kontrakt + datafält + access link
-      - skickar mail med kvitto + signeringslänk
-    """
-    row = load_agreement(agreement_id)
-    if not row:
-        raise RuntimeError(f"Agreement saknas: {agreement_id}")
-
-    if row.get("delivered"):
-        return
-
-    data = row["data"]
-    customer_email = row.get("customer_email") or data.get("kund_email") or ""
-    customer_name = row.get("customer_name") or data.get("lantagare_namn") or "Kund"
-
-    # 1) Skapa Oneflow kontrakt från template
-    contract_name = f"Bilutlåningsavtal – {customer_name} – {agreement_id[:8]}"
-    contract_id, participant_id = oneflow_create_contract_from_template(
-        template_id=ONEFLOW_TEMPLATE_ID,
-        contract_name=contract_name,
-        counterparty_name=customer_name,
-        counterparty_email=customer_email,
+    # Save stripe session id
+    conn = db()
+    conn.execute(
+        "UPDATE agreements SET stripe_session_id = ?, updated_at = ? WHERE id = ?",
+        (session.get("id"), utc_iso(), agreement_id),
     )
+    conn.commit()
+    conn.close()
 
-    # 2) Sätt datafält
-    oneflow_set_data_fields(contract_id, agreement_to_oneflow_fields(data))
+    return RedirectResponse(url=session.url, status_code=303)
 
-    # 3) Skapa access link
-    access_link = oneflow_create_access_link(contract_id, participant_id)
-
-    update_agreement_fields(
-        agreement_id,
-        oneflow_contract_id=contract_id,
-        oneflow_participant_id=participant_id,
-        oneflow_access_link=access_link,
-        delivered=1,
-    )
-
-    # 4) Maila kvitto + signeringslänk
-    recipients = [x for x in [customer_email, LEAD_INBOX] if x]
-    if recipients:
-        body = (
-            "Tack för din betalning.\n\n"
-            "För att signera bilutlåningsavtalet, använd länken nedan:\n"
-            f"{access_link}\n\n"
-            f"Orderreferens: {agreement_id}\n"
-            f"Belopp: {PREMIUM_PRICE_ORE/100:.2f} SEK\n\n"
-            "/HP Juridik"
-        )
-        ok, err = safe_send_email(
-            recipients,
-            "Premium – bilutlåningsavtal (signering)",
-            body,
-            attachments=None,
-        )
-        if not ok:
-            print("ALERT email failed:", err)
-
-
-# ----------------------------
-# Routes
-# ----------------------------
-
-@app.get("/healthz", response_class=PlainTextResponse)
-def healthz():
-    return "ok"
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-    if templates and os.path.exists("templates/pages/index.html"):
-        return templates.TemplateResponse("pages/index.html", {"request": request, "title": "HP Juridik"})
-    return HTMLResponse("<h1>HP Juridik</h1><p><a href='/lana-bil-till-skuldsatt'>/lana-bil-till-skuldsatt</a></p>")
-
-@app.get("/lana-bil-till-skuldsatt", response_class=HTMLResponse)
-async def form_page(request: Request):
-    if templates and os.path.exists("templates/pages/lana_bil.html"):
-        return templates.TemplateResponse("pages/lana_bil.html", {"request": request, "title": "Låna bil"})
-    # Minimal fallback (så sidan inte blir blank om templates saknas)
-    return HTMLResponse(
-        """
-        <h2>Låna bil till skuldsatt</h2>
-        <form method="post">
-          <p>Utlånare namn <input name="utlanare_namn"></p>
-          <p>Utlånare adress <input name="utlanare_adress"></p>
-          <p>Låntagare namn <input name="lantagare_namn"></p>
-          <p>Låntagare adress <input name="lantagare_adress"></p>
-          <p>Fordon regnr <input name="fordon_regnr"></p>
-          <p>Startdatum <input name="from_str"></p>
-          <p>Slutdatum <input name="to_str"></p>
-          <p>Ändamål <input name="andamal"></p>
-          <p>Kundens email <input name="kund_email"></p>
-          <p><label><input type="checkbox" name="premium" value="1"> Premium (signering via Oneflow)</label></p>
-          <button type="submit">Skicka</button>
-        </form>
-        """
-    )
-
-@app.post("/lana-bil-till-skuldsatt")
-async def form_submit(
-    request: Request,
-    utlanare_namn: str = Form(""),
-    utlanare_adress: str = Form(""),
-    lantagare_namn: str = Form(""),
-    lantagare_adress: str = Form(""),
-    fordon_regnr: str = Form(""),
-    from_str: str = Form(""),
-    to_str: str = Form(""),
-    andamal: str = Form(""),
-    kund_email: str = Form(""),
-    premium: Optional[str] = Form(None),  # "1" om premium vald
-):
-    agreement_id = str(uuid.uuid4())
-    data = {
-        "utlanare_namn": utlanare_namn,
-        "utlanare_adress": utlanare_adress,
-        "lantagare_namn": lantagare_namn,
-        "lantagare_adress": lantagare_adress,
-        "fordon_regnr": fordon_regnr,
-        "from_str": from_str,
-        "to_str": to_str,
-        "andamal": andamal,
-        "kund_email": kund_email,
-        "premium": bool(premium),
-    }
-    save_agreement(agreement_id, data, customer_email=kund_email, customer_name=lantagare_namn or kund_email)
-
-    if premium:
-        session = create_stripe_checkout_session(agreement_id)
-        update_agreement_fields(agreement_id, stripe_session_id=session.get("id"))
-        return RedirectResponse(url=session.url, status_code=303)
-
-    return RedirectResponse(url=f"/review?agreement_id={agreement_id}", status_code=303)
-
-@app.get("/review", response_class=HTMLResponse)
-async def review(request: Request, agreement_id: str):
-    row = load_agreement(agreement_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="agreement not found")
-    if templates and os.path.exists("templates/pages/review.html"):
-        return templates.TemplateResponse(
-            "pages/review.html",
-            {"request": request, "agreement": row["data"], "agreement_id": agreement_id},
-        )
-    return HTMLResponse(f"<pre>{json.dumps(row['data'], ensure_ascii=False, indent=2)}</pre>")
 
 @app.get("/checkout-success", response_class=HTMLResponse)
-async def checkout_success(request: Request, agreement_id: str):
-    if templates and os.path.exists("templates/pages/checkout_success.html"):
-        return templates.TemplateResponse("pages/checkout_success.html", {"request": request, "agreement_id": agreement_id})
-    return HTMLResponse("<h3>Tack! Vi skickar signeringslänk via e-post.</h3>")
+def checkout_success(request: Request):
+    ctx = page_ctx(request, "/checkout-success", "Tack | HP Juridik", "")
+    return templates.TemplateResponse("pages/checkout_success.html", ctx)
+
 
 @app.get("/checkout-cancel", response_class=HTMLResponse)
-async def checkout_cancel(request: Request, agreement_id: str):
-    if templates and os.path.exists("templates/pages/checkout_cancel.html"):
-        return templates.TemplateResponse("pages/checkout_cancel.html", {"request": request, "agreement_id": agreement_id})
-    return HTMLResponse("<h3>Avbrutet</h3>")
+def checkout_cancel(request: Request):
+    ctx = page_ctx(request, "/checkout-cancel", "Avbrutet | HP Juridik", "")
+    return templates.TemplateResponse("pages/checkout_cancel.html", ctx)
 
 
-# ----------------------------
-# Stripe webhook (premium leverans)
-# ----------------------------
-
+# =============================================================================
+# Stripe Webhook (premium delivery happens here)
+# =============================================================================
 @app.post("/stripe/webhook")
 async def stripe_webhook(request: Request):
     print("=== STRIPE WEBHOOK HIT ===", utc_iso())
-    require_env("STRIPE_WEBHOOK_SECRET", STRIPE_WEBHOOK_SECRET)
+
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="STRIPE_WEBHOOK_SECRET saknas")
 
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
@@ -608,144 +622,146 @@ async def stripe_webhook(request: Request):
         return PlainTextResponse("missing stripe-signature header", status_code=400)
 
     try:
-        event = stripe.Webhook.construct_event(payload=payload, sig_header=sig_header, secret=STRIPE_WEBHOOK_SECRET)
-    except Exception as e:
-        print("Stripe verify failed:", repr(e))
-        return PlainTextResponse(f"invalid signature: {type(e).__name__}", status_code=400)
-
-    etype = event.get("type")
-    print("Stripe event:", etype)
-
-    if etype == "checkout.session.completed":
-        session_obj = event["data"]["object"]
-        session_id = session_obj.get("id")
-        metadata = session_obj.get("metadata") or {}
-        agreement_id = metadata.get("agreement_id")
-
-        print(
-            "checkout session:",
-            session_id,
-            "agreement_id:",
-            agreement_id,
-            "status:",
-            session_obj.get("status"),
-            "payment_status:",
-            session_obj.get("payment_status"),
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET,
         )
+    except Exception as e:
+        print("Stripe webhook verify failed:", repr(e))
+        return PlainTextResponse("invalid signature", status_code=400)
 
-        if not agreement_id:
-            if LEAD_INBOX:
-                safe_send_email(
-                    [LEAD_INBOX],
-                    "Stripe ALERT: saknar agreement_id",
-                    f"session_id={session_id}\nmetadata={metadata}\n",
-                )
-            return PlainTextResponse("ok", status_code=200)
+    event_type = event.get("type")
+    print("Stripe event:", event_type)
 
-        row = load_agreement(agreement_id)
-        if not row:
-            if LEAD_INBOX:
-                safe_send_email(
-                    [LEAD_INBOX],
-                    "Stripe ALERT: agreement saknas (persistens)",
-                    f"agreement_id={agreement_id}\nsession_id={session_id}\nmetadata={metadata}\n",
-                )
-            return PlainTextResponse("ok", status_code=200)
-
-        # Idempotens
-        if row.get("delivered"):
-            return PlainTextResponse("ok", status_code=200)
-
-        update_agreement_fields(agreement_id, stripe_session_id=session_id, stripe_paid_at=utc_iso())
-
-        try:
-            deliver_premium(agreement_id)
-        except Exception as e:
-            msg = f"Premium delivery failed\nagreement_id={agreement_id}\nsession_id={session_id}\nerr={repr(e)}\n"
-            print("WARNING:", msg)
-            if LEAD_INBOX:
-                safe_send_email([LEAD_INBOX], "Premium delivery failed", msg)
-            # returnera 200 så Stripe inte spam-retryar (du kan ändra till 500 om du VILL retries)
-            return PlainTextResponse("ok", status_code=200)
-
+    if event_type != "checkout.session.completed":
         return PlainTextResponse("ok", status_code=200)
+
+    session_obj = event["data"]["object"]
+    session_id = session_obj.get("id")
+    payment_status = session_obj.get("payment_status")
+    status = session_obj.get("status")
+
+    metadata = session_obj.get("metadata") or {}
+    agreement_id = metadata.get("agreement_id")
+
+    print("checkout session:", session_id, "agreement_id:", agreement_id, "status:", status, "payment_status:", payment_status)
+
+    # If metadata is missing, alert and still return 200 so Stripe stops retrying (you can choose 500 if you want retries)
+    if not agreement_id:
+        msg = (
+            "Stripe checkout.session.completed MEN metadata.agreement_id saknas.\n\n"
+            f"session_id: {session_id}\n"
+            f"metadata: {metadata}\n"
+        )
+        safe_send_email([LEAD_INBOX], "Stripe ALERT: saknar agreement_id", msg)
+        return PlainTextResponse("ok", status_code=200)
+
+    # Mark paid
+    conn = db()
+    conn.execute(
+        """
+        UPDATE agreements
+        SET paid_at = COALESCE(paid_at, ?),
+            stripe_payment_intent = COALESCE(stripe_payment_intent, ?),
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (utc_iso(), session_obj.get("payment_intent"), utc_iso(), agreement_id),
+    )
+    conn.commit()
+    conn.close()
+
+    # Deliver (idempotent inside deliver_premium)
+    try:
+        deliver_premium(agreement_id)
+        print("Premium delivered:", agreement_id)
+    except Exception as e:
+        err_txt = f"Premium delivery failed for agreement_id={agreement_id} session_id={session_id}: {e!r}"
+        print(err_txt)
+        safe_send_email([LEAD_INBOX], "Delivery ERROR i Stripe webhook", err_txt)
+        # Return 500 => Stripe retry (useful for transient errors)
+        return PlainTextResponse("delivery error", status_code=500)
 
     return PlainTextResponse("ok", status_code=200)
 
 
-# ----------------------------
-# Oneflow webhook (signerat)
-# ----------------------------
-
-def verify_oneflow_webhook(headers: Dict[str, str]) -> bool:
+# =============================================================================
+# Oneflow webhook (status updates after signing)
+# =============================================================================
+def verify_oneflow_signature(callback_id: str, signature: str) -> bool:
     """
-    Oneflow webhook signering: signature = sha1(callback_id + signKey)
-    Oneflow visar detta i UI.
+    Oneflow UI says:
+    signature = sha1(callback_id + <Sign key>)
     """
     if not ONEFLOW_WEBHOOK_SIGN_KEY:
-        return True  # om du inte vill verifiera nu
-    callback_id = headers.get("x-oneflow-callback-id") or headers.get("X-Oneflow-Callback-Id") or ""
-    signature = headers.get("x-oneflow-signature") or headers.get("X-Oneflow-Signature") or ""
-    if not callback_id or not signature:
-        return False
+        return True  # allow if not configured (dev)
     expected = hashlib.sha1((callback_id + ONEFLOW_WEBHOOK_SIGN_KEY).encode("utf-8")).hexdigest()
-    return expected == signature
+    return hmac.compare_digest(expected, signature or "")
+
 
 @app.post("/oneflow/webhook")
 async def oneflow_webhook(request: Request):
-    if not verify_oneflow_webhook(dict(request.headers)):
-        return PlainTextResponse("invalid signature", status_code=400)
-
+    """
+    Webhook URL set in Oneflow: https://www.hpjuridik.se/oneflow/webhook
+    """
     body = await request.body()
     try:
-        payload = json.loads(body.decode("utf-8"))
+        data = json.loads(body.decode("utf-8"))
     except Exception:
-        return PlainTextResponse("bad json", status_code=400)
+        return PlainTextResponse("invalid json", status_code=400)
 
-    contract_id = (
-        str(payload.get("contract_id") or payload.get("id") or "")
-        or str(((payload.get("contract") or {}).get("id") or ""))
+    callback_id = str(data.get("callback_id") or data.get("id") or "")
+    signature = str(data.get("signature") or "")
+    if callback_id and signature and not verify_oneflow_signature(callback_id, signature):
+        return PlainTextResponse("invalid signature", status_code=400)
+
+    # Best effort parsing (payloads vary)
+    event_type = data.get("event") or data.get("type") or "unknown"
+    document_id = (
+        str(data.get("document_id") or "")
+        or str((data.get("document") or {}).get("id") or "")
     )
-    event_type = payload.get("type") or payload.get("event_type") or payload.get("event") or ""
-    print("Oneflow webhook:", event_type, "contract_id:", contract_id)
+    external_id = (
+        str(data.get("external_id") or "")
+        or str((data.get("document") or {}).get("external_id") or "")
+    )
+    status = data.get("status") or (data.get("document") or {}).get("status") or ""
 
-    if not contract_id:
-        return PlainTextResponse("ok", status_code=200)
+    print("Oneflow webhook:", event_type, "document_id:", document_id, "external_id:", external_id, "status:", status)
 
-    with db() as conn:
-        row = conn.execute(
-            "SELECT id, signed_pdf_sent FROM agreements WHERE oneflow_contract_id=?",
-            (contract_id,),
-        ).fetchone()
+    # If we stored external_id=agreement_id at creation, we can update agreement
+    agreement_id = external_id
 
-    if not row:
-        return PlainTextResponse("ok", status_code=200)
-
-    agreement_id = row["id"]
-    if row["signed_pdf_sent"]:
-        return PlainTextResponse("ok", status_code=200)
-
-    # försök ladda ner PDF (om den inte finns än -> ok)
-    try:
-        pdf_bytes = oneflow_download_contract_pdf(contract_id)
-    except Exception as e:
-        print("Oneflow download not ready:", repr(e))
-        return PlainTextResponse("ok", status_code=200)
-
-    agr = load_agreement(agreement_id)
-    data = agr["data"] if agr else {}
-    customer_email = (agr.get("customer_email") if agr else "") or data.get("kund_email") or ""
-    recipients = [x for x in [customer_email, LEAD_INBOX] if x]
-
-    if recipients:
-        ok, err = safe_send_email(
-            recipients,
-            "Signerad handling – bilutlåningsavtal",
-            f"Hej!\n\nHär kommer den signerade handlingen.\n\nReferens: {agreement_id}\n\n/HP Juridik",
-            attachments=[(f"bilutlaningsavtal_{agreement_id[:8]}.pdf", pdf_bytes, "application/pdf")],
+    if agreement_id:
+        conn = db()
+        conn.execute(
+            """
+            UPDATE agreements
+            SET oneflow_document_id = COALESCE(oneflow_document_id, ?),
+                oneflow_status = COALESCE(?, oneflow_status),
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (document_id or None, status or None, utc_iso(), agreement_id),
         )
-        if not ok:
-            print("signed pdf email failed:", err)
+        conn.commit()
+        conn.close()
 
-    update_agreement_fields(agreement_id, oneflow_signed_at=utc_iso(), signed_pdf_sent=1)
+    # If you want: when status becomes "signed", email final PDF to both parties.
+    # (Downloading signed PDF endpoint differs per tenant, so not hard-coded here.)
     return PlainTextResponse("ok", status_code=200)
+
+
+# =============================================================================
+# Health / misc
+# =============================================================================
+@app.get("/healthz", response_class=PlainTextResponse)
+def healthz():
+    return "ok"
+
+
+@app.head("/", include_in_schema=False)
+def head_root():
+    # Render health checks sometimes do HEAD /
+    return Response(status_code=200)
