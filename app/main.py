@@ -325,14 +325,14 @@ def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str
 def oneflow_set_data_fields(contract_id: str, flat: Dict[str, Any]) -> None:
     payload = {
         "data_fields": [
-            {"external_key": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
-            {"external_key": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
-            {"external_key": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
-            {"external_key": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
-            {"external_key": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
-            {"external_key": "from_str", "value": str(flat.get("from_str") or "")},
-            {"external_key": "to_str", "value": str(flat.get("to_str") or "")},
-            {"external_key": "andamal", "value": str(flat.get("andamal") or "")},
+            {"custom_id": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
+            {"custom_id": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
+            {"custom_id": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
+            {"custom_id": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
+            {"custom_id": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
+            {"custom_id": "from_str", "value": str(flat.get("from_str") or "")},
+            {"custom_id": "to_str", "value": str(flat.get("to_str") or "")},
+            {"custom_id": "andamal", "value": str(flat.get("andamal") or "")},
         ]
     }
 
