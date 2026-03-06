@@ -298,7 +298,7 @@ def oneflow_headers() -> Dict[str, str]:
 
 
 def oneflow_contract_url(contract_id: str) -> str:
-    return f"https://app.oneflow.com/contract/{contract_id}"
+    return f"https://app.oneflow.com/contract/{contract_id}/"
 
 
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
