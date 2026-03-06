@@ -40,7 +40,7 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 
 # ------------------------------------------------------------------------------
-# Env
+# Environment
 # ------------------------------------------------------------------------------
 BASE_URL = os.getenv("BASE_URL", "http://localhost:10000").rstrip("/")
 SITE_URL = os.getenv("SITE_URL", "https://www.hpjuridik.se").rstrip("/")
@@ -297,25 +297,11 @@ def oneflow_headers() -> Dict[str, str]:
     }
 
 
-def agreement_to_oneflow_data_fields(flat: Dict[str, Any]) -> List[Dict[str, str]]:
-    return [
-        {"custom_id": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
-        {"custom_id": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
-        {"custom_id": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
-        {"custom_id": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
-        {"custom_id": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
-        {"custom_id": "from_str", "value": str(flat.get("from_str") or "")},
-        {"custom_id": "to_str", "value": str(flat.get("to_str") or "")},
-        {"custom_id": "andamal", "value": str(flat.get("andamal") or "")},
-    ]
-
-
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "workspace_id": int(ONEFLOW_WORKSPACE_ID),
         "template_id": int(ONEFLOW_TEMPLATE_ID),
         "name": f"Bilutlåningsavtal {agreement['agreement_id']}",
-        "data_fields": agreement_to_oneflow_data_fields(agreement["flat"]),
     }
 
     log("ONEFLOW create payload:", json.dumps(payload, ensure_ascii=False))
