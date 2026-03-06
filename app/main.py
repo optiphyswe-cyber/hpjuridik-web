@@ -297,11 +297,25 @@ def oneflow_headers() -> Dict[str, str]:
     }
 
 
+def agreement_to_oneflow_data_fields(flat: Dict[str, Any]) -> List[Dict[str, str]]:
+    return [
+        {"custom_id": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
+        {"custom_id": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
+        {"custom_id": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
+        {"custom_id": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
+        {"custom_id": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
+        {"custom_id": "from_str", "value": str(flat.get("from_str") or "")},
+        {"custom_id": "to_str", "value": str(flat.get("to_str") or "")},
+        {"custom_id": "andamal", "value": str(flat.get("andamal") or "")},
+    ]
+
+
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "workspace_id": int(ONEFLOW_WORKSPACE_ID),
         "template_id": int(ONEFLOW_TEMPLATE_ID),
         "name": f"Bilutlåningsavtal {agreement['agreement_id']}",
+        "data_fields": agreement_to_oneflow_data_fields(agreement["flat"]),
     }
 
     log("ONEFLOW create payload:", json.dumps(payload, ensure_ascii=False))
@@ -320,36 +334,6 @@ def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str
         raise OneflowError(f"Oneflow create failed {r.status_code}: {r.text}")
 
     return r.json()
-
-
-def oneflow_set_data_fields(contract_id: str, flat: Dict[str, Any]) -> None:
-    payload = {
-        "data_fields": [
-            {"custom_id": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
-            {"custom_id": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
-            {"custom_id": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
-            {"custom_id": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
-            {"custom_id": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
-            {"custom_id": "from_str", "value": str(flat.get("from_str") or "")},
-            {"custom_id": "to_str", "value": str(flat.get("to_str") or "")},
-            {"custom_id": "andamal", "value": str(flat.get("andamal") or "")},
-        ]
-    }
-
-    log("ONEFLOW data_fields payload:", json.dumps(payload, ensure_ascii=False))
-
-    r = requests.put(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/data_fields",
-        headers=oneflow_headers(),
-        json=payload,
-        timeout=30,
-    )
-
-    log("ONEFLOW data_fields status:", r.status_code)
-    log("ONEFLOW data_fields body:", r.text)
-
-    if r.status_code >= 300:
-        raise OneflowError(f"Oneflow data_fields failed {r.status_code}: {r.text}")
 
 
 def oneflow_publish_contract(contract_id: str) -> None:
@@ -549,7 +533,6 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
 
     log("ONEFLOW contract_id:", contract_id)
 
-    oneflow_set_data_fields(contract_id, agreement["flat"])
     oneflow_publish_contract(contract_id)
 
     agreement["is_paid"] = True
