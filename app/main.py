@@ -72,7 +72,10 @@ if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
 ONEFLOW_ENABLED = bool(
-    ONEFLOW_API_TOKEN and ONEFLOW_TEMPLATE_ID and ONEFLOW_WORKSPACE_ID
+    ONEFLOW_API_TOKEN
+    and ONEFLOW_TEMPLATE_ID
+    and ONEFLOW_WORKSPACE_ID
+    and ONEFLOW_USER_EMAIL
 )
 
 COMPANY = {
@@ -284,14 +287,14 @@ class OneflowError(RuntimeError):
 def oneflow_headers() -> Dict[str, str]:
     if not ONEFLOW_API_TOKEN:
         raise OneflowError("ONEFLOW_API_TOKEN missing")
+    if not ONEFLOW_USER_EMAIL:
+        raise OneflowError("ONEFLOW_USER_EMAIL missing")
 
-    headers = {
+    return {
         "x-oneflow-api-token": ONEFLOW_API_TOKEN,
+        "x-oneflow-user-email": ONEFLOW_USER_EMAIL,
         "Content-Type": "application/json",
     }
-    if ONEFLOW_USER_EMAIL:
-        headers["x-oneflow-user-email"] = ONEFLOW_USER_EMAIL
-    return headers
 
 
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
