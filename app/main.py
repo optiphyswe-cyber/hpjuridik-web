@@ -297,6 +297,10 @@ def oneflow_headers() -> Dict[str, str]:
     }
 
 
+def oneflow_contract_url(contract_id: str) -> str:
+    return f"https://app.oneflow.com/contract/{contract_id}"
+
+
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "workspace_id": int(ONEFLOW_WORKSPACE_ID),
@@ -500,8 +504,19 @@ def deliver_premium_fallback(agreement: Dict[str, Any], stripe_session_id: str) 
 
 
 def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -> None:
-    if agreement.get("oneflow_contract_id") and agreement.get("oneflow_published"):
-        log("ONEFLOW already exists for agreement:", agreement["agreement_id"])
+    existing_contract_id = str(agreement.get("oneflow_contract_id") or "").strip()
+    if existing_contract_id:
+        log("ONEFLOW already exists for agreement:", agreement["agreement_id"], existing_contract_id)
+
+        agreement["is_paid"] = True
+        agreement["stripe_session_id"] = stripe_session_id
+        if not agreement.get("oneflow_contract_url"):
+            agreement["oneflow_contract_url"] = oneflow_contract_url(existing_contract_id)
+        if not agreement.get("oneflow_status"):
+            agreement["oneflow_status"] = "published"
+        if not agreement.get("delivery_mode"):
+            agreement["delivery_mode"] = "oneflow"
+        save_agreement(agreement)
         return
 
     log("ONEFLOW start agreement:", agreement["agreement_id"])
@@ -521,9 +536,16 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
 
     oneflow_publish_contract(contract_id)
 
+    contract_url = (
+        contract.get("url")
+        or (contract.get("contract") or {}).get("url")
+        or oneflow_contract_url(contract_id)
+    )
+
     agreement["is_paid"] = True
     agreement["stripe_session_id"] = stripe_session_id
     agreement["oneflow_contract_id"] = contract_id
+    agreement["oneflow_contract_url"] = contract_url
     agreement["oneflow_published"] = True
     agreement["oneflow_status"] = "published"
     agreement["delivery_mode"] = "oneflow"
@@ -533,10 +555,11 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
     flat = agreement["flat"]
     ok, err = safe_send_email(
         [flat.get("utlanare_epost"), flat.get("lantagare_epost")],
-        "Tack för betalningen – signering via Oneflow",
+        "Bilutlåningsavtal – signera via Oneflow",
         (
             "Tack för betalningen.\n\n"
-            "Avtalet har nu skapats i Oneflow och skickas för digital signering.\n\n"
+            "Avtalet har nu skapats i Oneflow och skickats för digital signering.\n\n"
+            f"Öppna avtalet här:\n{contract_url}\n\n"
             f"Avtals-ID: {agreement['agreement_id']}\n\n"
             "/HP Juridik"
         ),
@@ -686,7 +709,12 @@ def lana_bil_submit(
     newsletter_optin: Optional[str] = Form(None),
 ):
     if not disclaimer_accept:
-        ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa bilutlåningsavtal")
+        ctx = page_ctx(
+            request,
+            "/lana-bil-till-skuldsatt",
+            "Låna bil till skuldsatt | HP Juridik",
+            "Skapa bilutlåningsavtal",
+        )
         ctx.update({"error": "Du måste godkänna friskrivningen."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
@@ -694,12 +722,22 @@ def lana_bil_submit(
         from_obj = datetime.fromisoformat(from_dt)
         to_obj = datetime.fromisoformat(to_dt)
     except ValueError:
-        ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa bilutlåningsavtal")
+        ctx = page_ctx(
+            request,
+            "/lana-bil-till-skuldsatt",
+            "Låna bil till skuldsatt | HP Juridik",
+            "Skapa bilutlåningsavtal",
+        )
         ctx.update({"error": "Ogiltigt datumformat."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
     if to_obj <= from_obj:
-        ctx = page_ctx(request, "/lana-bil-till-skuldsatt", "Låna bil till skuldsatt | HP Juridik", "Skapa bilutlåningsavtal")
+        ctx = page_ctx(
+            request,
+            "/lana-bil-till-skuldsatt",
+            "Låna bil till skuldsatt | HP Juridik",
+            "Skapa bilutlåningsavtal",
+        )
         ctx.update({"error": "Till-datum måste vara efter från-datum."})
         return templates.TemplateResponse("pages/lana_bil.html", ctx, status_code=400)
 
@@ -765,6 +803,7 @@ def lana_bil_submit(
         "delivered": False,
         "delivery_mode": None,
         "oneflow_contract_id": None,
+        "oneflow_contract_url": None,
         "oneflow_published": False,
         "oneflow_status": None,
         "oneflow_error": None,
