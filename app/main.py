@@ -40,7 +40,7 @@ app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
 
 # ------------------------------------------------------------------------------
-# Environment
+# Env
 # ------------------------------------------------------------------------------
 BASE_URL = os.getenv("BASE_URL", "http://localhost:10000").rstrip("/")
 SITE_URL = os.getenv("SITE_URL", "https://www.hpjuridik.se").rstrip("/")
@@ -92,6 +92,13 @@ COMPANY = {
 # ------------------------------------------------------------------------------
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def log(*parts: Any) -> None:
+    try:
+        print("[HPJ]", *parts, flush=True)
+    except Exception:
+        pass
 
 
 def ensure_dir(path: str) -> None:
@@ -330,14 +337,19 @@ def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str
         ],
     }
 
+    log("ONEFLOW create payload:", json.dumps(payload, ensure_ascii=False))
     r = requests.post(
         f"{ONEFLOW_BASE_URL}/contracts/create",
         headers=oneflow_headers(),
         json=payload,
         timeout=30,
     )
+    log("ONEFLOW create status:", r.status_code)
+    log("ONEFLOW create body:", r.text)
+
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow create failed {r.status_code}: {r.text}")
+
     return r.json()
 
 
@@ -353,12 +365,16 @@ def oneflow_set_data_fields(contract_id: str, flat: Dict[str, Any]) -> None:
         {"external_key": "andamal", "value": str(flat.get("andamal") or "")},
     ]
 
+    log("ONEFLOW data_fields payload:", json.dumps(payload, ensure_ascii=False))
     r = requests.put(
         f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/data_fields",
         headers=oneflow_headers(),
         json=payload,
         timeout=30,
     )
+    log("ONEFLOW data_fields status:", r.status_code)
+    log("ONEFLOW data_fields body:", r.text)
+
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow data_fields failed {r.status_code}: {r.text}")
 
@@ -369,12 +385,16 @@ def oneflow_publish_contract(contract_id: str) -> None:
         "message": "Ni har fått ett avtal för signering via Oneflow.",
     }
 
+    log("ONEFLOW publish payload:", json.dumps(payload, ensure_ascii=False))
     r = requests.post(
         f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/publish",
         headers=oneflow_headers(),
         json=payload,
         timeout=30,
     )
+    log("ONEFLOW publish status:", r.status_code)
+    log("ONEFLOW publish body:", r.text)
+
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow publish failed {r.status_code}: {r.text}")
 
@@ -385,6 +405,9 @@ def oneflow_get_contract(contract_id: str) -> Dict[str, Any]:
         headers=oneflow_headers(),
         timeout=30,
     )
+    log("ONEFLOW get contract status:", r.status_code)
+    log("ONEFLOW get contract body:", r.text[:3000])
+
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow get contract failed {r.status_code}: {r.text}")
     return r.json()
@@ -396,6 +419,9 @@ def oneflow_download_signed_pdf(contract_id: str) -> bytes:
         headers=oneflow_headers(),
         timeout=30,
     )
+    log("ONEFLOW files status:", r.status_code)
+    log("ONEFLOW files body:", r.text[:3000])
+
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow files failed {r.status_code}: {r.text}")
 
@@ -426,6 +452,8 @@ def oneflow_download_signed_pdf(contract_id: str) -> bytes:
         headers=oneflow_headers(),
         timeout=60,
     )
+    log("ONEFLOW download status:", r2.status_code)
+
     if r2.status_code >= 300:
         raise OneflowError(f"Oneflow download failed {r2.status_code}: {r2.text}")
 
@@ -498,6 +526,7 @@ def deliver_free(agreement: Dict[str, Any]) -> None:
     agreement["delivered"] = True
     agreement["delivery_mode"] = "free_pdf"
     save_agreement(agreement)
+    log("FREE delivered:", agreement["agreement_id"])
 
 
 def deliver_premium_fallback(agreement: Dict[str, Any], stripe_session_id: str) -> None:
@@ -520,16 +549,20 @@ def deliver_premium_fallback(agreement: Dict[str, Any], stripe_session_id: str) 
     agreement["delivery_mode"] = "premium_pdf_fallback"
     agreement["oneflow_status"] = "fallback_pdf"
     save_agreement(agreement)
+    log("PREMIUM fallback delivered:", agreement["agreement_id"])
 
 
 def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -> None:
     if agreement.get("oneflow_contract_id") and agreement.get("oneflow_published"):
+        log("ONEFLOW already exists for agreement:", agreement["agreement_id"])
         return
 
+    log("ONEFLOW start agreement:", agreement["agreement_id"])
     contract = oneflow_create_contract_from_template(agreement)
+
     contract_id = str(contract.get("id") or "")
     if not contract_id:
-        raise OneflowError("Missing contract id from Oneflow")
+        raise OneflowError(f"Missing contract id from Oneflow: {contract}")
 
     oneflow_set_data_fields(contract_id, agreement["flat"])
     oneflow_publish_contract(contract_id)
@@ -543,7 +576,7 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
     save_agreement(agreement)
 
     flat = agreement["flat"]
-    safe_send_email(
+    ok, err = safe_send_email(
         [flat.get("utlanare_epost"), flat.get("lantagare_epost")],
         "Tack för betalningen – signering via Oneflow",
         (
@@ -553,6 +586,10 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
             "/HP Juridik"
         ),
     )
+    if not ok:
+        log("ONEFLOW info mail failed:", err)
+
+    log("ONEFLOW delivered OK:", agreement["agreement_id"], "contract_id:", contract_id)
 
 
 def finalize_signed_contract(agreement: Dict[str, Any]) -> None:
@@ -583,6 +620,8 @@ def finalize_signed_contract(agreement: Dict[str, Any]) -> None:
     )
     if not ok:
         raise RuntimeError(err)
+
+    log("ONEFLOW signed PDF sent:", agreement["agreement_id"])
 
 
 # ------------------------------------------------------------------------------
@@ -788,11 +827,13 @@ def lana_bil_submit(
         "oneflow_contract_id": None,
         "oneflow_published": False,
         "oneflow_status": None,
+        "oneflow_error": None,
         "signed_pdf_b64": None,
     }
 
     save_agreement(agreement)
     request.session["agreement_id"] = agreement_id
+    log("AGREEMENT created:", agreement_id)
     return RedirectResponse(url="/lana-bil-till-skuldsatt/review", status_code=303)
 
 
@@ -893,6 +934,7 @@ def lana_bil_review_post(
 
         agreement["stripe_session_id"] = session.id
         save_agreement(agreement)
+        log("STRIPE checkout created:", session.id, "agreement:", agreement_id)
         return RedirectResponse(url=session.url, status_code=303)
 
     raise HTTPException(status_code=400, detail="Invalid plan")
@@ -926,22 +968,30 @@ def checkout_cancel(request: Request):
 @app.post("/stripe/webhook")
 @app.post("/stripe/webhook/")
 async def stripe_webhook(request: Request):
+    log("=== STRIPE WEBHOOK HIT ===")
+
     if not STRIPE_WEBHOOK_SECRET:
+        log("ERROR: STRIPE_WEBHOOK_SECRET missing")
         return PlainTextResponse("missing webhook secret", status_code=500)
 
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
 
     if not sig_header:
+        log("ERROR: missing stripe signature")
         return PlainTextResponse("missing stripe signature", status_code=400)
 
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
     except Exception as e:
+        log("ERROR: invalid stripe signature:", repr(e))
         return PlainTextResponse(f"invalid signature: {e}", status_code=400)
 
     event_type = event.get("type")
+    log("Stripe event_type:", event_type)
+
     if event_type not in ("checkout.session.completed", "checkout.session.async_payment_succeeded"):
+        log("INFO: ignoring event type")
         return PlainTextResponse("ok", status_code=200)
 
     session_obj = event["data"]["object"]
@@ -950,24 +1000,42 @@ async def stripe_webhook(request: Request):
     metadata = session_obj.get("metadata") or {}
     agreement_id = metadata.get("agreement_id")
 
+    log("session_id:", session_id)
+    log("payment_status:", payment_status)
+    log("agreement_id:", agreement_id)
+
     if payment_status != "paid":
+        log("INFO: payment not paid yet")
         return PlainTextResponse("ok", status_code=200)
 
     if not agreement_id:
+        log("ERROR: agreement_id missing in metadata")
         safe_send_email([LEAD_INBOX], "Stripe error", f"Missing agreement_id for session {session_id}")
         return PlainTextResponse("ok", status_code=200)
 
     agreement = load_agreement(agreement_id)
     if not agreement:
+        log("ERROR: agreement not found:", agreement_id)
         safe_send_email([LEAD_INBOX], "Stripe error", f"Agreement not found: {agreement_id}")
         return PlainTextResponse("ok", status_code=200)
 
     try:
         if ONEFLOW_ENABLED:
+            log("INFO: ONEFLOW enabled -> start premium delivery")
             deliver_premium_oneflow(agreement, session_id)
+            log("INFO: deliver_premium_oneflow OK")
         else:
+            log("INFO: ONEFLOW disabled -> fallback PDF")
             deliver_premium_fallback(agreement, session_id)
+            log("INFO: deliver_premium_fallback OK")
     except Exception as e:
+        agreement["is_paid"] = True
+        agreement["stripe_session_id"] = session_id
+        agreement["oneflow_status"] = "error"
+        agreement["oneflow_error"] = repr(e)
+        save_agreement(agreement)
+
+        log("ERROR: premium delivery failed:", repr(e))
         safe_send_email(
             [LEAD_INBOX],
             "Stripe premium delivery failed",
@@ -984,21 +1052,30 @@ async def stripe_webhook(request: Request):
 @app.post("/oneflow/webhook")
 @app.post("/oneflow/webhook/")
 async def oneflow_webhook(request: Request):
+    log("=== ONEFLOW WEBHOOK HIT ===")
+
     if not verify_oneflow_webhook(dict(request.headers)):
+        log("ERROR: invalid Oneflow signature")
         return PlainTextResponse("invalid signature", status_code=400)
 
     body = await request.body()
     try:
         payload = json.loads(body.decode("utf-8"))
     except Exception:
+        log("ERROR: bad Oneflow json")
         return PlainTextResponse("bad json", status_code=400)
 
+    log("ONEFLOW webhook payload:", json.dumps(payload, ensure_ascii=False)[:4000])
+
     contract_id = extract_contract_id(payload)
+    log("ONEFLOW webhook contract_id:", contract_id)
+
     if not contract_id:
         return PlainTextResponse("ok", status_code=200)
 
     agreement = find_agreement_by_contract_id(contract_id)
     if not agreement:
+        log("ONEFLOW agreement not found for contract:", contract_id)
         return PlainTextResponse("ok", status_code=200)
 
     try:
@@ -1008,7 +1085,13 @@ async def oneflow_webhook(request: Request):
         else:
             agreement["oneflow_status"] = "webhook_received"
             save_agreement(agreement)
+            log("ONEFLOW webhook received but contract not signed yet")
     except Exception as e:
+        agreement["oneflow_status"] = "error"
+        agreement["oneflow_error"] = repr(e)
+        save_agreement(agreement)
+
+        log("ONEFLOW finalize failed:", repr(e))
         safe_send_email(
             [LEAD_INBOX],
             "Oneflow finalize failed",
