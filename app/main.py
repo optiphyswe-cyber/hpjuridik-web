@@ -150,6 +150,10 @@ def normalize_regnr(value: str) -> str:
     return "".join((value or "").split()).upper()
 
 
+def clean_email(value: str) -> str:
+    return (value or "").strip().lower()
+
+
 def page_ctx(request: Request, path: str, title: str, description: str) -> Dict[str, Any]:
     canonical = f"{SITE_URL}{path}"
     return {
@@ -297,11 +301,44 @@ def oneflow_headers() -> Dict[str, str]:
     }
 
 
+def oneflow_build_individual_party(name: str, email: str, identification_number: str = "") -> Dict[str, Any]:
+    return {
+        "country_code": "SE",
+        "type": "individual",
+        "participant": {
+            "_permissions": {
+                "contract:update": True
+            },
+            "delivery_channel": "email",
+            "email": clean_email(email),
+            "identification_number": identification_number or "",
+            "name": name,
+            "signatory": True,
+            "sign_method": "standard_esign",
+            "two_step_authentication_method": "email",
+        },
+    }
+
+
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
+    flat = agreement["flat"]
+
     payload = {
         "workspace_id": int(ONEFLOW_WORKSPACE_ID),
         "template_id": int(ONEFLOW_TEMPLATE_ID),
         "name": f"Bilutlåningsavtal {agreement['agreement_id']}",
+        "parties": [
+            oneflow_build_individual_party(
+                name=str(flat.get("utlanare_namn") or ""),
+                email=str(flat.get("utlanare_epost") or ""),
+                identification_number=str(flat.get("utlanare_pnr") or ""),
+            ),
+            oneflow_build_individual_party(
+                name=str(flat.get("lantagare_namn") or ""),
+                email=str(flat.get("lantagare_epost") or ""),
+                identification_number=str(flat.get("lantagare_pnr") or ""),
+            ),
+        ],
     }
 
     log("ONEFLOW create payload:", json.dumps(payload, ensure_ascii=False))
@@ -314,7 +351,7 @@ def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str
     )
 
     log("ONEFLOW create status:", r.status_code)
-    log("ONEFLOW create body:", r.text)
+    log("ONEFLOW create body:", r.text[:5000])
 
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow create failed {r.status_code}: {r.text}")
@@ -338,7 +375,7 @@ def oneflow_publish_contract(contract_id: str) -> None:
     )
 
     log("ONEFLOW publish status:", r.status_code)
-    log("ONEFLOW publish body:", r.text)
+    log("ONEFLOW publish body:", r.text[:3000])
 
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow publish failed {r.status_code}: {r.text}")
@@ -352,7 +389,7 @@ def oneflow_get_contract(contract_id: str) -> Dict[str, Any]:
     )
 
     log("ONEFLOW get contract status:", r.status_code)
-    log("ONEFLOW get contract body:", r.text[:3000])
+    log("ONEFLOW get contract body:", r.text[:5000])
 
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow get contract failed {r.status_code}: {r.text}")
@@ -360,106 +397,9 @@ def oneflow_get_contract(contract_id: str) -> Dict[str, Any]:
     return r.json()
 
 
-def oneflow_get_parties(contract_id: str) -> List[Dict[str, Any]]:
-    r = requests.get(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/parties",
-        headers=oneflow_headers(),
-        timeout=30,
-    )
-
-    log("ONEFLOW parties status:", r.status_code)
-    log("ONEFLOW parties body:", r.text[:3000])
-
-    if r.status_code >= 300:
-        raise OneflowError(f"Oneflow parties failed {r.status_code}: {r.text}")
-
-    data = r.json()
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        if isinstance(data.get("parties"), list):
-            return data["parties"]
-        if isinstance(data.get("data"), list):
-            return data["data"]
-    return []
-
-
-def extract_external_participants(parties: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    results: List[Dict[str, Any]] = []
-
-    for party in parties:
-        if party.get("my_party") is True:
-            continue
-
-        # individual party
-        participant = party.get("participant")
-        if isinstance(participant, dict):
-            email = str(participant.get("email") or "").strip().lower()
-            pid = participant.get("id")
-            if pid:
-                results.append(
-                    {
-                        "participant_id": int(pid),
-                        "email": email,
-                        "name": str(participant.get("name") or ""),
-                        "party_name": str(party.get("name") or ""),
-                    }
-                )
-
-        # company party
-        participants = party.get("participants")
-        if isinstance(participants, list):
-            for item in participants:
-                if not isinstance(item, dict):
-                    continue
-                email = str(item.get("email") or "").strip().lower()
-                pid = item.get("id")
-                if pid:
-                    results.append(
-                        {
-                            "participant_id": int(pid),
-                            "email": email,
-                            "name": str(item.get("name") or ""),
-                            "party_name": str(party.get("name") or ""),
-                        }
-                    )
-
-    return results
-
-
-def oneflow_create_access_link(contract_id: str, participant_id: int) -> str:
-    r = requests.post(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/participants/{participant_id}/access_link",
-        headers=oneflow_headers(),
-        json={},
-        timeout=30,
-    )
-
-    log("ONEFLOW access_link status:", r.status_code)
-    log("ONEFLOW access_link body:", r.text[:3000])
-
-    if r.status_code >= 300:
-        raise OneflowError(f"Oneflow access_link failed {r.status_code}: {r.text}")
-
-    data = r.json()
-    candidates = [
-        data.get("url"),
-        data.get("href"),
-        data.get("link"),
-        data.get("access_link"),
-        (data.get("_links") or {}).get("self"),
-        ((data.get("_links") or {}).get("access_link") or {}).get("href"),
-    ]
-    for item in candidates:
-        if isinstance(item, str) and item.strip():
-            return item.strip()
-
-    raise OneflowError(f"Could not extract access link from Oneflow response: {data}")
-
-
 def oneflow_download_signed_pdf(contract_id: str) -> bytes:
     r = requests.get(
-        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/files",
+        f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/files/",
         headers=oneflow_headers(),
         timeout=30,
     )
@@ -538,6 +478,7 @@ def extract_contract_id(payload: Dict[str, Any]) -> str:
 def contract_is_signed(contract: Dict[str, Any]) -> bool:
     raw = json.dumps(contract, ensure_ascii=False).lower()
     markers = [
+        '"sign_state":"signed"',
         '"state":"signed"',
         '"status":"signed"',
         '"lifecycle_state":"signed"',
@@ -596,67 +537,6 @@ def deliver_premium_fallback(agreement: Dict[str, Any], stripe_session_id: str) 
     log("PREMIUM fallback delivered:", agreement["agreement_id"])
 
 
-def send_oneflow_access_link_emails(agreement: Dict[str, Any], contract_id: str) -> None:
-    flat = agreement["flat"]
-    target_emails = [
-        str(flat.get("utlanare_epost") or "").strip().lower(),
-        str(flat.get("lantagare_epost") or "").strip().lower(),
-    ]
-
-    parties = oneflow_get_parties(contract_id)
-    external_participants = extract_external_participants(parties)
-
-    links_by_email: Dict[str, str] = {}
-    for participant in external_participants:
-        email = participant["email"]
-        if not email or email in links_by_email:
-            continue
-        try:
-            link = oneflow_create_access_link(contract_id, participant["participant_id"])
-            links_by_email[email] = link
-        except Exception as e:
-            log("ONEFLOW access_link failed for participant:", participant, repr(e))
-
-    any_link_sent = False
-    for email in target_emails:
-        if not email:
-            continue
-        link = links_by_email.get(email)
-        if not link:
-            continue
-
-        ok, err = safe_send_email(
-            [email],
-            "Bilutlåningsavtal – signera via Oneflow",
-            (
-                "Tack för betalningen.\n\n"
-                "Här är er personliga signeringslänk till avtalet i Oneflow:\n\n"
-                f"{link}\n\n"
-                f"Avtals-ID: {agreement['agreement_id']}\n\n"
-                "/HP Juridik"
-            ),
-        )
-        if ok:
-            any_link_sent = True
-        else:
-            log("ONEFLOW access link mail failed:", email, err)
-
-    if not any_link_sent:
-        ok, err = safe_send_email(
-            [flat.get("utlanare_epost"), flat.get("lantagare_epost")],
-            "Bilutlåningsavtal – signering via Oneflow",
-            (
-                "Tack för betalningen.\n\n"
-                "Avtalet har nu skapats i Oneflow och skickats för digital signering.\n\n"
-                "Oneflow skickar eller tillhandahåller signeringslänk separat.\n\n"
-                f"Avtals-ID: {agreement['agreement_id']}\n\n"
-                "/HP Juridik"
-            ),
-        )
-        if not ok:
-            log("ONEFLOW fallback info mail failed:", err)
-
-
 def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -> None:
     existing_contract_id = str(agreement.get("oneflow_contract_id") or "").strip()
     if existing_contract_id:
@@ -697,24 +577,20 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
     agreement["oneflow_error"] = None
     save_agreement(agreement)
 
-    try:
-        send_oneflow_access_link_emails(agreement, contract_id)
-    except Exception as e:
-        log("ONEFLOW access-link flow failed:", repr(e))
-        flat = agreement["flat"]
-        ok, err = safe_send_email(
-            [flat.get("utlanare_epost"), flat.get("lantagare_epost")],
-            "Bilutlåningsavtal – signering via Oneflow",
-            (
-                "Tack för betalningen.\n\n"
-                "Avtalet har nu skapats i Oneflow och skickats för digital signering.\n\n"
-                "Om signeringslänken inte kommit fram ännu, kontrollera skräppost eller invänta Oneflow-mejl.\n\n"
-                f"Avtals-ID: {agreement['agreement_id']}\n\n"
-                "/HP Juridik"
-            ),
-        )
-        if not ok:
-            log("ONEFLOW generic info mail failed:", err)
+    flat = agreement["flat"]
+    ok, err = safe_send_email(
+        [flat.get("utlanare_epost"), flat.get("lantagare_epost")],
+        "Bilutlåningsavtal – signering via Oneflow",
+        (
+            "Tack för betalningen.\n\n"
+            "Avtalet har nu skapats i Oneflow och skickats för digital signering.\n\n"
+            "Oneflow skickar signeringslänk direkt till de e-postadresser som angivits i avtalet.\n\n"
+            f"Avtals-ID: {agreement['agreement_id']}\n\n"
+            "/HP Juridik"
+        ),
+    )
+    if not ok:
+        log("ONEFLOW info mail failed:", err)
 
     log("ONEFLOW delivered OK:", agreement["agreement_id"], "contract_id:", contract_id)
 
@@ -899,12 +775,12 @@ def lana_bil_submit(
         "utlanare_pnr": utlanare_pnr,
         "utlanare_adress": utlanare_adress,
         "utlanare_tel": utlanare_tel,
-        "utlanare_epost": utlanare_epost,
+        "utlanare_epost": clean_email(utlanare_epost),
         "lantagare_namn": lantagare_namn,
         "lantagare_pnr": lantagare_pnr,
         "lantagare_adress": lantagare_adress,
         "lantagare_tel": lantagare_tel,
-        "lantagare_epost": lantagare_epost,
+        "lantagare_epost": clean_email(lantagare_epost),
         "fordon_modell": fordon_modell,
         "fordon_regnr": normalize_regnr(fordon_regnr),
         "from_str": from_obj.strftime("%Y-%m-%d %H:%M"),
@@ -924,14 +800,14 @@ def lana_bil_submit(
             "utlanare": {
                 "namn": utlanare_namn,
                 "adress": utlanare_adress,
-                "epost": utlanare_epost,
+                "epost": flat["utlanare_epost"],
                 "tel": utlanare_tel,
                 "pnr": utlanare_pnr,
             },
             "lantagare": {
                 "namn": lantagare_namn,
                 "adress": lantagare_adress,
-                "epost": lantagare_epost,
+                "epost": flat["lantagare_epost"],
                 "tel": lantagare_tel,
                 "pnr": lantagare_pnr,
             },
