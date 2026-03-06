@@ -28,6 +28,9 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 
 
+# ------------------------------------------------------------------------------
+# App
+# ------------------------------------------------------------------------------
 app = FastAPI(redirect_slashes=False)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 templates = Jinja2Templates(directory="app/templates")
@@ -35,6 +38,10 @@ templates = Jinja2Templates(directory="app/templates")
 SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me-now")
 app.add_middleware(SessionMiddleware, secret_key=SESSION_SECRET)
 
+
+# ------------------------------------------------------------------------------
+# Env
+# ------------------------------------------------------------------------------
 BASE_URL = os.getenv("BASE_URL", "http://localhost:10000").rstrip("/")
 SITE_URL = os.getenv("SITE_URL", "https://www.hpjuridik.se").rstrip("/")
 
@@ -59,7 +66,7 @@ ONEFLOW_WORKSPACE_ID = os.getenv("ONEFLOW_WORKSPACE_ID", "")
 ONEFLOW_WEBHOOK_SIGN_KEY = os.getenv("ONEFLOW_WEBHOOK_SIGN_KEY", "")
 ONEFLOW_USER_EMAIL = os.getenv("ONEFLOW_USER_EMAIL", "")
 
-DATA_DIR = os.getenv("AGREEMENTS_DIR", "/tmp/hpjuridik_agreements")
+AGREEMENTS_DIR = os.getenv("AGREEMENTS_DIR", "/tmp/hpjuridik_agreements")
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
@@ -83,6 +90,9 @@ COMPANY = {
 }
 
 
+# ------------------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------------------
 def utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -99,12 +109,12 @@ def ensure_dir(path: str) -> None:
 
 
 def agreement_path(agreement_id: str) -> str:
-    ensure_dir(DATA_DIR)
-    return os.path.join(DATA_DIR, f"{agreement_id}.json")
+    ensure_dir(AGREEMENTS_DIR)
+    return os.path.join(AGREEMENTS_DIR, f"{agreement_id}.json")
 
 
 def save_agreement(agreement: Dict[str, Any]) -> None:
-    ensure_dir(DATA_DIR)
+    ensure_dir(AGREEMENTS_DIR)
     agreement["updated_at"] = utc_iso()
     with open(agreement_path(agreement["agreement_id"]), "w", encoding="utf-8") as f:
         json.dump(agreement, f, ensure_ascii=False, indent=2)
@@ -121,11 +131,11 @@ def load_agreement(agreement_id: Optional[str]) -> Optional[Dict[str, Any]]:
 
 
 def find_agreement_by_contract_id(contract_id: str) -> Optional[Dict[str, Any]]:
-    ensure_dir(DATA_DIR)
-    for filename in os.listdir(DATA_DIR):
+    ensure_dir(AGREEMENTS_DIR)
+    for filename in os.listdir(AGREEMENTS_DIR):
         if not filename.endswith(".json"):
             continue
-        full = os.path.join(DATA_DIR, filename)
+        full = os.path.join(AGREEMENTS_DIR, filename)
         try:
             with open(full, "r", encoding="utf-8") as f:
                 agreement = json.load(f)
@@ -197,6 +207,9 @@ def safe_send_email(
         return False, repr(e)
 
 
+# ------------------------------------------------------------------------------
+# PDF
+# ------------------------------------------------------------------------------
 def build_loan_pdf(flat: Dict[str, Any]) -> bytes:
     buf = io.BytesIO()
 
@@ -264,6 +277,9 @@ def build_loan_pdf(flat: Dict[str, Any]) -> bytes:
     return buf.getvalue()
 
 
+# ------------------------------------------------------------------------------
+# Oneflow
+# ------------------------------------------------------------------------------
 class OneflowError(RuntimeError):
     pass
 
@@ -308,14 +324,16 @@ def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str
 
 def oneflow_set_data_fields(contract_id: str, flat: Dict[str, Any]) -> None:
     payload = {
-        "utlanare_namn": str(flat.get("utlanare_namn") or ""),
-        "utlanare_adress": str(flat.get("utlanare_adress") or ""),
-        "lantagare_namn": str(flat.get("lantagare_namn") or ""),
-        "lantagare_adress": str(flat.get("lantagare_adress") or ""),
-        "fordon_regnr": str(flat.get("fordon_regnr") or ""),
-        "from_str": str(flat.get("from_str") or ""),
-        "to_str": str(flat.get("to_str") or ""),
-        "andamal": str(flat.get("andamal") or ""),
+        "data_fields": [
+            {"external_key": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
+            {"external_key": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
+            {"external_key": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
+            {"external_key": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
+            {"external_key": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
+            {"external_key": "from_str", "value": str(flat.get("from_str") or "")},
+            {"external_key": "to_str", "value": str(flat.get("to_str") or "")},
+            {"external_key": "andamal", "value": str(flat.get("andamal") or "")},
+        ]
     }
 
     log("ONEFLOW data_fields payload:", json.dumps(payload, ensure_ascii=False))
@@ -422,7 +440,6 @@ def oneflow_download_signed_pdf(contract_id: str) -> bytes:
 
 
 def verify_oneflow_webhook(headers: Dict[str, str]) -> bool:
-    # Tillfälligt mjuk verifiering under integration
     if not ONEFLOW_WEBHOOK_SIGN_KEY:
         return True
 
@@ -430,13 +447,10 @@ def verify_oneflow_webhook(headers: Dict[str, str]) -> bool:
     signature = headers.get("x-oneflow-signature") or headers.get("X-Oneflow-Signature") or ""
 
     if not callback_id or not signature:
-        log("ONEFLOW webhook saknar callback/signature header -> släpper igenom tillfälligt")
+        log("ONEFLOW webhook missing signature headers -> allow during integration")
         return True
 
-    expected = hashlib.sha1(
-        (callback_id + ONEFLOW_WEBHOOK_SIGN_KEY).encode("utf-8")
-    ).hexdigest()
-
+    expected = hashlib.sha1((callback_id + ONEFLOW_WEBHOOK_SIGN_KEY).encode("utf-8")).hexdigest()
     return hmac.compare_digest(expected, signature)
 
 
@@ -466,6 +480,9 @@ def contract_is_signed(contract: Dict[str, Any]) -> bool:
     return any(marker in raw for marker in markers)
 
 
+# ------------------------------------------------------------------------------
+# Delivery
+# ------------------------------------------------------------------------------
 def deliver_free(agreement: Dict[str, Any]) -> None:
     if agreement.get("delivered"):
         return
@@ -593,6 +610,9 @@ def finalize_signed_contract(agreement: Dict[str, Any]) -> None:
     log("ONEFLOW signed PDF sent:", agreement["agreement_id"])
 
 
+# ------------------------------------------------------------------------------
+# Routes
+# ------------------------------------------------------------------------------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     ctx = page_ctx(request, "/", "HP Juridik", "HP Juridik")
@@ -870,6 +890,9 @@ def checkout_cancel(request: Request):
     return templates.TemplateResponse("pages/checkout_cancel.html", ctx)
 
 
+# ------------------------------------------------------------------------------
+# Stripe webhook
+# ------------------------------------------------------------------------------
 @app.post("/stripe/webhook")
 @app.post("/stripe/webhook/")
 async def stripe_webhook(request: Request):
@@ -951,6 +974,9 @@ async def stripe_webhook(request: Request):
     return PlainTextResponse("ok", status_code=200)
 
 
+# ------------------------------------------------------------------------------
+# Oneflow webhook
+# ------------------------------------------------------------------------------
 @app.post("/oneflow/webhook")
 @app.post("/oneflow/webhook/")
 async def oneflow_webhook(request: Request):
@@ -1003,6 +1029,9 @@ async def oneflow_webhook(request: Request):
     return PlainTextResponse("ok", status_code=200)
 
 
+# ------------------------------------------------------------------------------
+# Health
+# ------------------------------------------------------------------------------
 @app.get("/healthz", response_class=PlainTextResponse)
 def healthz():
     return "ok"
