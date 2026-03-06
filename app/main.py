@@ -307,7 +307,7 @@ def oneflow_build_individual_party(name: str, email: str, identification_number:
         "type": "individual",
         "participant": {
             "_permissions": {
-                "contract:update": True
+                "contract:update": True,
             },
             "delivery_channel": "email",
             "email": clean_email(email),
@@ -318,6 +318,19 @@ def oneflow_build_individual_party(name: str, email: str, identification_number:
             "two_step_authentication_method": "email",
         },
     }
+
+
+def oneflow_build_data_fields(flat: Dict[str, Any]) -> List[Dict[str, str]]:
+    return [
+        {"custom_id": "utlanare_namn", "value": str(flat.get("utlanare_namn") or "")},
+        {"custom_id": "utlanare_adress", "value": str(flat.get("utlanare_adress") or "")},
+        {"custom_id": "lantagare_namn", "value": str(flat.get("lantagare_namn") or "")},
+        {"custom_id": "lantagare_adress", "value": str(flat.get("lantagare_adress") or "")},
+        {"custom_id": "fordon_regnr", "value": str(flat.get("fordon_regnr") or "")},
+        {"custom_id": "from_str", "value": str(flat.get("from_str") or "")},
+        {"custom_id": "to_str", "value": str(flat.get("to_str") or "")},
+        {"custom_id": "andamal", "value": str(flat.get("andamal") or "")},
+    ]
 
 
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
@@ -339,6 +352,7 @@ def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str
                 identification_number=str(flat.get("lantagare_pnr") or ""),
             ),
         ],
+        "data_fields": oneflow_build_data_fields(flat),
     }
 
     log("ONEFLOW create payload:", json.dumps(payload, ensure_ascii=False))
