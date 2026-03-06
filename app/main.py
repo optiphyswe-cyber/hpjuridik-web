@@ -295,55 +295,21 @@ def oneflow_headers() -> Dict[str, str]:
 
 
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
-    flat = agreement["flat"]
-
-    lender_name = flat.get("utlanare_namn") or "Utlånare"
-    lender_email = flat.get("utlanare_epost")
-    borrower_name = flat.get("lantagare_namn") or "Låntagare"
-    borrower_email = flat.get("lantagare_epost")
-
-    if not lender_email or not borrower_email:
-        raise OneflowError("Missing participant email")
-
     payload = {
         "workspace_id": int(ONEFLOW_WORKSPACE_ID),
         "template_id": int(ONEFLOW_TEMPLATE_ID),
         "name": f"Bilutlåningsavtal {agreement['agreement_id']}",
-        "parties": [
-            {
-                "type": "individual",
-                "name": lender_name,
-                "participants": [
-                    {
-                        "name": lender_name,
-                        "email": lender_email,
-                        "delivery_channel": "email",
-                        "sign_method": "swedish_bankid",
-                    }
-                ],
-            },
-            {
-                "type": "individual",
-                "name": borrower_name,
-                "participants": [
-                    {
-                        "name": borrower_name,
-                        "email": borrower_email,
-                        "delivery_channel": "email",
-                        "sign_method": "swedish_bankid",
-                    }
-                ],
-            },
-        ],
     }
 
     log("ONEFLOW create payload:", json.dumps(payload, ensure_ascii=False))
+
     r = requests.post(
         f"{ONEFLOW_BASE_URL}/contracts/create",
         headers=oneflow_headers(),
         json=payload,
         timeout=30,
     )
+
     log("ONEFLOW create status:", r.status_code)
     log("ONEFLOW create body:", r.text)
 
@@ -366,12 +332,14 @@ def oneflow_set_data_fields(contract_id: str, flat: Dict[str, Any]) -> None:
     ]
 
     log("ONEFLOW data_fields payload:", json.dumps(payload, ensure_ascii=False))
+
     r = requests.put(
         f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/data_fields",
         headers=oneflow_headers(),
         json=payload,
         timeout=30,
     )
+
     log("ONEFLOW data_fields status:", r.status_code)
     log("ONEFLOW data_fields body:", r.text)
 
@@ -386,12 +354,14 @@ def oneflow_publish_contract(contract_id: str) -> None:
     }
 
     log("ONEFLOW publish payload:", json.dumps(payload, ensure_ascii=False))
+
     r = requests.post(
         f"{ONEFLOW_BASE_URL}/contracts/{contract_id}/publish",
         headers=oneflow_headers(),
         json=payload,
         timeout=30,
     )
+
     log("ONEFLOW publish status:", r.status_code)
     log("ONEFLOW publish body:", r.text)
 
@@ -405,11 +375,13 @@ def oneflow_get_contract(contract_id: str) -> Dict[str, Any]:
         headers=oneflow_headers(),
         timeout=30,
     )
+
     log("ONEFLOW get contract status:", r.status_code)
     log("ONEFLOW get contract body:", r.text[:3000])
 
     if r.status_code >= 300:
         raise OneflowError(f"Oneflow get contract failed {r.status_code}: {r.text}")
+
     return r.json()
 
 
@@ -419,6 +391,7 @@ def oneflow_download_signed_pdf(contract_id: str) -> bytes:
         headers=oneflow_headers(),
         timeout=30,
     )
+
     log("ONEFLOW files status:", r.status_code)
     log("ONEFLOW files body:", r.text[:3000])
 
@@ -452,6 +425,7 @@ def oneflow_download_signed_pdf(contract_id: str) -> bytes:
         headers=oneflow_headers(),
         timeout=60,
     )
+
     log("ONEFLOW download status:", r2.status_code)
 
     if r2.status_code >= 300:
@@ -558,11 +532,19 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
         return
 
     log("ONEFLOW start agreement:", agreement["agreement_id"])
+
     contract = oneflow_create_contract_from_template(agreement)
 
-    contract_id = str(contract.get("id") or "")
+    contract_id = str(
+        contract.get("id")
+        or (contract.get("contract") or {}).get("id")
+        or ""
+    )
+
     if not contract_id:
         raise OneflowError(f"Missing contract id from Oneflow: {contract}")
+
+    log("ONEFLOW contract_id:", contract_id)
 
     oneflow_set_data_fields(contract_id, agreement["flat"])
     oneflow_publish_contract(contract_id)
@@ -573,6 +555,7 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
     agreement["oneflow_published"] = True
     agreement["oneflow_status"] = "published"
     agreement["delivery_mode"] = "oneflow"
+    agreement["oneflow_error"] = None
     save_agreement(agreement)
 
     flat = agreement["flat"]
@@ -581,7 +564,7 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
         "Tack för betalningen – signering via Oneflow",
         (
             "Tack för betalningen.\n\n"
-            "Ett avtal har nu skickats via Oneflow för digital signering med BankID.\n\n"
+            "Avtalet har nu skapats i Oneflow och skickas för digital signering.\n\n"
             f"Avtals-ID: {agreement['agreement_id']}\n\n"
             "/HP Juridik"
         ),
