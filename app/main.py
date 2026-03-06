@@ -297,10 +297,6 @@ def oneflow_headers() -> Dict[str, str]:
     }
 
 
-def oneflow_contract_url(contract_id: str) -> str:
-    return f"https://app.oneflow.com/contract/{contract_id}/"
-
-
 def oneflow_create_contract_from_template(agreement: Dict[str, Any]) -> Dict[str, Any]:
     payload = {
         "workspace_id": int(ONEFLOW_WORKSPACE_ID),
@@ -510,8 +506,6 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
 
         agreement["is_paid"] = True
         agreement["stripe_session_id"] = stripe_session_id
-        if not agreement.get("oneflow_contract_url"):
-            agreement["oneflow_contract_url"] = oneflow_contract_url(existing_contract_id)
         if not agreement.get("oneflow_status"):
             agreement["oneflow_status"] = "published"
         if not agreement.get("delivery_mode"):
@@ -536,16 +530,9 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
 
     oneflow_publish_contract(contract_id)
 
-    contract_url = (
-        contract.get("url")
-        or (contract.get("contract") or {}).get("url")
-        or oneflow_contract_url(contract_id)
-    )
-
     agreement["is_paid"] = True
     agreement["stripe_session_id"] = stripe_session_id
     agreement["oneflow_contract_id"] = contract_id
-    agreement["oneflow_contract_url"] = contract_url
     agreement["oneflow_published"] = True
     agreement["oneflow_status"] = "published"
     agreement["delivery_mode"] = "oneflow"
@@ -555,11 +542,11 @@ def deliver_premium_oneflow(agreement: Dict[str, Any], stripe_session_id: str) -
     flat = agreement["flat"]
     ok, err = safe_send_email(
         [flat.get("utlanare_epost"), flat.get("lantagare_epost")],
-        "Bilutlåningsavtal – signera via Oneflow",
+        "Bilutlåningsavtal – signering via Oneflow",
         (
             "Tack för betalningen.\n\n"
             "Avtalet har nu skapats i Oneflow och skickats för digital signering.\n\n"
-            f"Öppna avtalet här:\n{contract_url}\n\n"
+            "Ni får signeringslänk från Oneflow via e-post.\n\n"
             f"Avtals-ID: {agreement['agreement_id']}\n\n"
             "/HP Juridik"
         ),
@@ -803,7 +790,6 @@ def lana_bil_submit(
         "delivered": False,
         "delivery_mode": None,
         "oneflow_contract_id": None,
-        "oneflow_contract_url": None,
         "oneflow_published": False,
         "oneflow_status": None,
         "oneflow_error": None,
