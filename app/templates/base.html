@@ -9,8 +9,20 @@
   <link rel="canonical" href="{% if seo and seo.canonical %}{{ seo.canonical }}{% else %}https://hpjuridik.se/{% endif %}">
   <meta name="robots" content="{% if seo and seo.robots %}{{ seo.robots }}{% else %}index,follow{% endif %}">
 
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-3CXX8HFFKM"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-3CXX8HFFKM');
+  </script>
+
   <link rel="stylesheet" href="/static/style.css" />
 </head>
+
+<body>
+
 <a href="tel:0763171284" class="sticky-call" aria-label="Ring HP Juridik">
   <span class="sticky-ic">
     <img src="{{ url_for('static', path='head-phonecall.png') }}" alt="">
@@ -22,7 +34,6 @@
   </span>
 
   <span class="sticky-go" aria-hidden="true">
-    <!-- liten “smooth” pil -->
     <svg viewBox="0 0 24 24" fill="none">
       <path d="M9 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
     </svg>
