@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="sv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Test bokspelare</title>
+
+<style>
+
+body{
+    font-family: Arial, sans-serif;
+    max-width: 820px;
+    margin: 40px auto;
+    padding: 0 16px;
+    background:#f7f7f7;
+}
+
+.card{
+    background:white;
+    border-radius:14px;
+    padding:24px;
+    box-shadow:0 5px 20px rgba(0,0,0,0.08);
+}
+
+h1{
+    margin-top:0;
+}
+
+.player-controls{
+    margin-top:20px;
+    display:flex;
+    gap:10px;
+    flex-wrap:wrap;
+}
+
+button{
+    padding:10px 16px;
+    border-radius:8px;
+    border:none;
+    background:#1f3b6e;
+    color:white;
+    cursor:pointer;
+}
+
+button:hover{
+    background:#2d4f8c;
+}
+
+audio{
+    width:100%;
+    margin-top:18px;
+}
+
+.info{
+    margin-top:12px;
+    font-size:14px;
+    color:#666;
+}
+
+</style>
+</head>
+
+
+<body>
+
+<div class="card">
+
+<h1>Test av bokuppspelning</h1>
+
+<p>
+Denna sida spelar upp ljudboken direkt från Supabase.
+</p>
+
+
+<audio id="player" controls preload="auto" playsinline>
+    <source src="{{ audio_url }}" type="audio/mpeg">
+</audio>
+
+
+<div class="player-controls">
+
+<button onclick="playAudio()">Play</button>
+<button onclick="pauseAudio()">Pause</button>
+
+<button onclick="setSpeed(1)">1x</button>
+<button onclick="setSpeed(1.25)">1.25x</button>
+<button onclick="setSpeed(1.5)">1.5x</button>
+
+</div>
+
+<p class="info">
+Position sparas automatiskt i browsern.
+</p>
+
+</div>
+
+
+<script>
+
+const player = document.getElementById("player")
+
+/* PLAY / PAUSE */
+
+function playAudio(){
+    player.play()
+}
+
+function pauseAudio(){
+    player.pause()
+}
+
+
+/* SPEED */
+
+function setSpeed(speed){
+    player.playbackRate = speed
+}
+
+
+/* SPARA POSITION */
+
+const storageKey = "book_position"
+
+player.addEventListener("timeupdate",()=>{
+    localStorage.setItem(storageKey,player.currentTime)
+})
+
+window.addEventListener("load",()=>{
+    const saved = localStorage.getItem(storageKey)
+    if(saved){
+        player.currentTime = saved
+    }
+})
+
+
+/* MEDIA SESSION (låsskärm mobil) */
+
+if("mediaSession" in navigator){
+
+    navigator.mediaSession.metadata = new MediaMetadata({
+        title:"Min bok",
+        artist:"HP Juridik",
+        album:"Juridikserien"
+    })
+
+    navigator.mediaSession.setActionHandler("play",()=>player.play())
+    navigator.mediaSession.setActionHandler("pause",()=>player.pause())
+
+}
+
+</script>
+
+</body>
+</html>
